@@ -20,11 +20,11 @@
 
 \maketitle
 
-\section{Contexto e Fronteira do Sistema}
+\section*{Contexto e Fronteira do Sistema}
 
 Entre 1985 e 1987, o Therac-25, um acelerador linear de elétrons utilizado para radioterapia, causou sérios acidentes em hospitais nos Estados Unidos e no Canadá \cite{wiki_therac}. O equipamento, produzido pela Atomic Energy of Canada Limited (AECL), foi responsável por seis acidentes graves de sobre-exposição documentados, resultando em três mortes diretas e em lesões irreversíveis para os restantes dos pacientes \cite{sutori_summary}. O Therac-25 operava fundamentalmente em dois modos terapêuticos principais. O primeiro era o modo de feixe de elétrons, caracterizado por um feixe de baixa intensidade, que era aplicado no tratamento de tumores superficiais. O segundo era o modo de feixe de Raio-X, no qual um feixe de elétrons de altíssima intensidade era disparado contra um alvo de tungsténio, produzindo raios-X de alta energia para tratamentos mais profundos \cite{wiki_therac}. O equipamento, controlado por um minicomputador PDP-11, recebia comandos de um operador humano através de um terminal. Nessa análise, será considerado como fronteira do sistema: hardware e software do Therac-25 são componentes internos e o ambiente externo é formado pelos operadores e a interação deles pelo terminal de comandos de operação da máquina.
 
-\section{Cadeia Causal (Fault $\rightarrow$ Error $\rightarrow$ Failure)}
+\section*{Cadeia Causal}
 Apesar de existirem múltiplas falhas do sistema interno que contribuíram para os acidentes, usaremos como foco as três principais falhas que levaram às mortes dos pacientes.
 
 Falha 1:
@@ -32,8 +32,8 @@ O Therac-25 tinha uma sub-rotina de verificação de segurança, que avaliava co
 
 \begin{itemize}
     \item \textbf{Falta (Fault):} A tragédia aconteceu devido a tipagem de dados da variável Class3 ser de 1 byte e não haver tratamento de Overflow. Caso o valor assumisse o valor máximo de 255, o overflow levaria o valor de volta a 0, fazendo com que o sistema assumisse que não havia nenhuma inconsistência e autorizasse o disparo.
-    \item \textbf{Erro (Error):} O operador concluiu o alinhamento visual do paciente usando o modo de calibração ("Luz de Campo") e apertou o botão de disparo no exato segundo em que a rotina fez a variável Class3 dar overflow \cite{medium_overflow}, resetando seu valor para 0 e permitindo o disparo sem as validações mecânicas daquele modo.
-    \item \textbf{Falha (Failure):} O sistema disparou o feixe de elétrons com a alta intensidade do modo Raio-X, mas sem colocar o alvo de tungstênio no caminho (pois as peças ainda estavam configuradas na posição do modo Luz de Campo), atingindo o paciente com uma carga letal direta de elétrons \cite{harvard_investigation}.
+    \item \textbf{Erro (Error):} O operador concluiu o alinhamento visual do paciente usando o modo de calibração, chamado de Luz de Campo, e apertou o botão de disparo no exato segundo em que a rotina fez a variável Class3 dar overflow \cite{medium_overflow}, resetando seu valor para 0 e permitindo o disparo sem as validações mecânicas daquele modo.
+    \item \textbf{Falha (Failure):} O sistema disparou o feixe de elétrons com a alta intensidade do modo Raio-X, mas sem colocar o alvo de tungstênio no caminho, pois as peças ainda estavam configuradas na posição do modo Luz de Campo, atingindo o paciente com uma carga letal direta de elétrons \cite{harvard_investigation}.
 \end{itemize}
 
 Falha 2:
@@ -42,7 +42,7 @@ O acelerador linear levava cerca de 8 segundos para ajustar os pesados ímãs na
 \begin{itemize}
     \item \textbf{Falta (Fault):} A sub-rotina responsável pelo alinhamento do prato giratório e configuração dos ímãs de varredura estava programada de forma a não aceitar nem reconhecer novas edições de parâmetros, como tipo de feixe, após a sua execução ter sido iniciada. Em resumo, não havia tratamento para condições de corrida entre duas rotinas simultâneas.
     \item \textbf{Erro (Error):} Durante essa janela de 8 segundos de alinhamento do prato giratório, o operador digitou "X", para Raio-X, por engano e fez a troca rapidamente para "E", para feixe de elétrons. Essa correção ficou cega ao sistema \cite{mit_investigation}, aparecendo para o operador a sua correção, mas que não foi aplicada fisicamente na máquina.
-    \item \textbf{Falha (Failure):} O tratamento que deveria ser um feixe de elétrons para um tratamento de tumor superficial, acabou disparando um feixe de altíssima intensidade (raio-X) em um paciente sem proteção \cite{harvard_investigation}.
+    \item \textbf{Falha (Failure):} O tratamento que deveria ser um feixe de elétrons para um tratamento de tumor superficial, acabou disparando um feixe de altíssima intensidade de raios X em um paciente sem proteção \cite{harvard_investigation}.
 \end{itemize}
 
 Falha 3:
@@ -50,27 +50,27 @@ Grande parte dos defeitos foi ocasionada por falhas primárias na UX do sistema.
 
 \begin{itemize}
     \item \textbf{Falta (Fault):} A sinalização de erro e a documentação da fabricante eram deficientes. O manual indicava que a mensagem "Malfunction 54" representava apenas um defeito comum e inofensivo de sub-dosagem \cite{vastblue_what_happened}. Essas oscilações de ajustes e na rede elétrica provocavam interrupções constantes, e a interface informava aos operadores que a recuperação imediata poderia ser obtida ao pressionar a tecla "P" no console \cite{smartbear_race}. O sistema permitia encadear até cinco destas tentativas consecutivas antes de desarmar por completo.
-    \item \textbf{Erro (Error):} O operador, olhando para o ecrã, viu a mensagem de pausa "Malfunction 54" e a indicação de dose zero (as overdoses massivas geradas pelas falhas saturavam os sensores de radiação, fazendo-os registrar falsamente valor nulo) \cite{vastblue_what_happened}. Enganado pela máquina e pela documentação, o técnico assumia que o disparo havia falhado e apertava a tecla "P" repetidamente.
+    \item \textbf{Erro (Error):} O operador, olhando para a tela, viu a mensagem de pausa "Malfunction 54" e a indicação de dose zero. As overdoses massivas geradas pelas falhas saturavam os sensores de radiação, fazendo-os registrar falsamente valor nulo \cite{vastblue_what_happened}. Enganado pela máquina e pela documentação, o técnico assumia que o disparo havia falhado e apertava a tecla "P" repetidamente.
     \item \textbf{Falha (Failure):} O comportamento do operador diante do erro "Malfunction 54" acabava por irradiar iterativamente o paciente que já clamava de dor aguda no interior do bunker blindado.
 \end{itemize}
 
 
-\section{Classificação Taxonômica da Falta Raiz}
+\section*{Classificação Taxonômica da Falta Raiz}
 \begin{itemize}
-    \item \textbf{Fase de criação:} Desenvolvimento (Development). Defeitos como a condição de corrida e o limite numérico (Integer Overflow) da variável Class3 foram injetados estritamente durante a fase de elaboração do projeto do código pela fabricante.  
+    \item \textbf{Fase de criação:} Desenvolvimento (Development). Defeitos como a condição de corrida e Integer Overflow da variável Class3 foram injetados estritamente durante a fase de elaboração do projeto do código pela fabricante.  
     \item \textbf{Fronteira:} Interna (Internal). A falta raiz provinha do código-fonte nativo do computador PDP-11, sendo um estado logicamente interno e assíncrono à arquitetura do software.
-    \item \textbf{Dimensão:} Software. A AECL optou ativamente por eliminar as travas físicas (fusíveis e redundância mecânica) presentes em modelos anteriores, determinando o software como única barreira de proteção de segurança \cite{vastblue_what_happened}.  
-    \item \textbf{Intenção:} Acidental. As falhas não ocorreram por motivos maliciosos ou deliberados (ex: sabotagem); resultaram de péssimas práticas de engenharia e negligência da AECL em seus testes.
+    \item \textbf{Dimensão:} Software. A AECL optou ativamente por eliminar as travas físicas, como fusíveis e redundância mecânica, presentes em modelos anteriores, determinando o software como única barreira de proteção de segurança \cite{vastblue_what_happened}.  
+    \item \textbf{Intenção:} Acidental. As falhas não ocorreram por motivos maliciosos ou deliberados, como sabotagem. Essas falhas resultaram de péssimas práticas de engenharia e negligência da AECL em seus testes.
     \item \textbf{Persistência:} Permanente. Os defeitos não eram avarias ou falhas transitórias de hardware, mas falhas sistemáticas que persistiam sempre no código e ocorriam repetidamente diante da mesma exata inserção de dados temporizada.
 \end{itemize}
 
-\section{Atributos Afetados}
+\section*{Atributos Afetados}
 \begin{itemize}
     \item \textbf{Availability}: Violada pelas suspensões intermitentes da máquina. Mensagens não documentadas como "Malfunction 54" ocorriam repetidamente, paralisando terapias por falsos defeitos ordinários e tornando o serviço intermitente.  
     \item \textbf{Reliability}: Fortemente violada. O sistema demonstrou incapacidade em lidar com sequências rápidas de edição da interface, ficando "cego" às entradas do operador e prosseguindo para um estado inconsistente e não confiável durante a rotina de configuração dos ímãs \cite{mit_investigation}.  
     \item \textbf{Safety}: Totalmente destruída. Foi a violação mais marcante desta tragédia. A ausência das travas físicas, baseando o interlock puramente num código vulnerável, custou as vidas dos pacientes perante as superdosagens. A fabricante confundiu a alta confiabilidade operacional prévia do equipamento com segurança efetiva.  
-    \item \textbf{Integrity}: Violada pela corrupção dos dados de uso devido ao Integer Overflow, onde o transbordamento da variável Class3 falseou a consistência lógica, fazendo o sistema assumir valor "0" (status seguro) de forma corrompida. Além disso, a saturação dos sensores fez com que a interface transmitisse no ecrã dosagens falsamente zeradas, corrompendo a verdade do tratamento radiológico.
-    \item \textbf{Maintainability}: Severamente violada devido ao emprego de práticas antiquadas, falta de documentação e pela reciclagem não testada dos códigos de modelos anteriores da AECL (Therac-6 e Therac-20) \cite{wiki_therac, mit_investigation}. A ausência de testes unitários ou auditorias prévias impossibilitou a reprodução rápida dos erros pela equipe e retardou as soluções vitais durante anos \cite{harvard_investigation}.
+    \item \textbf{Integrity}: Violada pela corrupção dos dados de uso devido ao Integer Overflow, onde o transbordamento da variável Class3 causou uma inconsitência lógica, fazendo o sistema assumir valor $0$, de status seguro, de forma corrompida. Além disso, a saturação dos sensores fez com que a interface exibisse dosagens falsamente zeradas na tela do computador, corrompendo a verdade do tratamento radiológico.
+    \item \textbf{Maintainability}: Severamente violada devido ao emprego de práticas antiquadas, falta de documentação e pela reciclagem não testada dos códigos de modelos anteriores da AECL, Therac-6 e Therac-20 \cite{wiki_therac, mit_investigation}. A ausência de testes unitários ou auditorias prévias impossibilitou a reprodução rápida dos erros pela equipe e retardou as soluções vitais durante anos \cite{harvard_investigation}.
 \end{itemize}
 
 \bibliographystyle{plain}

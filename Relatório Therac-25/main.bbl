@@ -1,0 +1,39 @@
+\begin{thebibliography}{1}
+
+\bibitem{medium_overflow}
+Dhanvina.
+\newblock Therac-25 ( integer overflow ).
+\newblock \url{ https://dhanvina.medium.com/therac-25-integer-overflow-423576220d9 }.
+
+\bibitem{harvard_investigation}
+Nancy~G Leveson and Clark~S Turner.
+\newblock An investigation of the therac-25 accidents.
+\newblock {\em Computer}, 26(7):18--41, 1993.
+\newblock \url{https://www.read.seas.harvard.edu/~ kohler/class/05f-osp/ref/leveson93investigation.pdf}.
+
+\bibitem{mit_investigation}
+{Massachusetts Institute of Technology}.
+\newblock An investigation of the therac-25 accidents -- part iii.
+\newblock \url{ https://web.mit.edu/6.033/2004/wwwdocs/papers/Therac_3.html}.
+
+\bibitem{smartbear_race}
+SmartBear.
+\newblock The worst computer bugs in history: Race conditions in therac-25.
+\newblock \url{ https://smartbear.com/blog/bug-day-race-condition-therac-25/}.
+
+\bibitem{sutori_summary}
+Sutori.
+\newblock Therac-25 accident summary.
+\newblock \url{ https://www.sutori.com/en/story/therac-25-accident-summary--zTRpW48523CDeS71yndLhoMb }.
+
+\bibitem{vastblue_what_happened}
+{VastBlue Innovations}.
+\newblock The therac-25 — what really happened.
+\newblock \url{ https://www.vastblueinnovations.com/editorial/what-really-happened/therac-25 }.
+
+\bibitem{wiki_therac}
+{Wikipedia Contributors}.
+\newblock Therac-25.
+\newblock \url{https://en.wikipedia.org/wiki/Therac-25}.
+
+\end{thebibliography}

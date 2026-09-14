@@ -1,8 +1,8 @@
-PWD c:/Users/gabri/Documents/Tolerância a Falhas/s_tol_distribuidos/Relatório
+PWD c:/Users/gabri/Documents/Tolerância a Falhas/s_tol_distribuidos/Relatório Therac-25
 INPUT c:/texlive/2025/texmf.cnf
 INPUT c:/texlive/2025/texmf-dist/web2c/texmf.cnf
 INPUT c:/texlive/2025/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT c:/Users/gabri/Documents/Tolerância a Falhas/s_tol_distribuidos/Relatório/main.tex
+INPUT c:/Users/gabri/Documents/Tolerância a Falhas/s_tol_distribuidos/Relatório Therac-25/main.tex
 OUTPUT main.log
 INPUT c:/texlive/2025/texmf-dist/tex/latex/base/article.cls
 INPUT c:/texlive/2025/texmf-dist/tex/latex/base/article.cls
@@ -133,10 +133,10 @@ INPUT ./main.out
 INPUT ./main.out
 INPUT main.out
 INPUT main.out
-OUTPUT main.pdf
 INPUT ./main.out
 INPUT ./main.out
 OUTPUT main.out
+OUTPUT main.pdf
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmr17.tfm
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmr12.tfm
 INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/ot1lmr.fd
@@ -173,17 +173,45 @@ INPUT c:/texlive/2025/texmf-dist/tex/latex/amsfonts/umsb.fd
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msbm10.tfm
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msbm10.tfm
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msbm7.tfm
-INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmr10.tfm
-INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmbx10.tfm
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmr17.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmbx12.tfm
+INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/ts1lmr.fd
+INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/ts1lmr.fd
+INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/ts1lmr.fd
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ts1-lmr12.tfm
 INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmbx12.tfm
 INPUT c:/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map
 INPUT c:/texlive/2025/texmf-dist/fonts/enc/dvips/lm/lm-ec.enc
+INPUT c:/texlive/2025/texmf-dist/fonts/enc/dvips/lm/lm-ts1.enc
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/rm-lmr12.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/rm-lmr8.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/rm-lmr6.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/lmmi12.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/lmmi8.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/lmmi6.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/lmsy10.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/lmsy8.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/lmsy6.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msam10.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msam10.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msam7.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msbm10.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msbm10.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/symbols/msbm7.tfm
+INPUT ./main.bbl
+INPUT ./main.bbl
+INPUT main.bbl
+INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/t1lmtt.fd
+INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/t1lmtt.fd
+INPUT c:/texlive/2025/texmf-dist/tex/latex/lm/t1lmtt.fd
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmtt12.tfm
+INPUT c:/texlive/2025/texmf-dist/fonts/enc/dvips/lm/lm-rm.enc
+INPUT c:/texlive/2025/texmf-dist/fonts/tfm/public/lm/ec-lmri12.tfm
 INPUT main.aux
 INPUT ./main.out
 INPUT ./main.out
-INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmbx10.pfb
 INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmbx12.pfb
-INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmr10.pfb
 INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmr12.pfb
 INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmr17.pfb
+INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmri12.pfb
+INPUT c:/texlive/2025/texmf-dist/fonts/type1/public/lm/lmtt12.pfb
