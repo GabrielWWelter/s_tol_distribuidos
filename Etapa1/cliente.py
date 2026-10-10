@@ -10,7 +10,30 @@ TIMEOUT = 0.010
 def get_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-def descobrir_servidor(sock, porta):
+def interface_servidor_descoberto(server_ip):
+    print(f"{get_timestamp()} server_addr {server_ip}", flush=True)
+
+def interface_resposta_recebida(server_ip, id_req, valor, num_reqs, total_sum):
+    ts = get_timestamp()
+    print(f"{ts} server {server_ip} id_req {id_req} value {valor} num_reqs {num_reqs} total_sum {total_sum}", flush=True)
+
+def subservico_interface_leitura(fila):
+    try:
+        for linha in sys.stdin:
+            linha = linha.strip()
+            if linha:
+                try:
+                    valor = int(linha)
+                    if valor > 0:
+                        fila.put(valor)
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+    finally:
+        fila.put(None)
+
+def subservico_descoberta(sock, porta):
     msg = protocolo.pack_discovery()
     sock.settimeout(0.5)
     destinos = [('<broadcast>', porta), ('127.0.0.1', porta)]
@@ -28,21 +51,24 @@ def descobrir_servidor(sock, porta):
         except socket.timeout:
             continue
 
-def ler_teclado(fila):
-    try:
-        for linha in sys.stdin:
-            linha = linha.strip()
-            if linha:
-                try:
-                    valor = int(linha)
-                    if valor > 0:
-                        fila.put(valor)
-                except ValueError:
-                    pass
-    except Exception:
-        pass
-    finally:
-        fila.put(None)
+def subservico_processamento(sock, server_addr, id_req, valor, server_ip):
+    pacote = protocolo.pack_req(id_req, valor)
+    sock.settimeout(TIMEOUT)
+
+    while True:
+        sock.sendto(pacote, server_addr)
+        try:
+            while True:
+                resp, addr = sock.recvfrom(1024)
+                if resp and resp[0] == protocolo.MSG_ACK:
+                    ack_id, num_reqs, total_sum = protocolo.unpack_ack(resp)
+                    if ack_id == id_req:
+                        interface_resposta_recebida(server_ip, id_req, valor, num_reqs, total_sum)
+                        return
+                    elif ack_id < id_req:
+                        continue
+        except socket.timeout:
+            continue
 
 def main():
     if len(sys.argv) < 2:
@@ -55,11 +81,11 @@ def main():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
     try:
-        server_ip = descobrir_servidor(sock, porta)
-        print(f"{get_timestamp()} server_addr {server_ip}", flush=True)
+        server_ip = subservico_descoberta(sock, porta)
+        interface_servidor_descoberto(server_ip)
 
         fila = queue.Queue()
-        t_leitora = threading.Thread(target=ler_teclado, args=(fila,), daemon=True)
+        t_leitora = threading.Thread(target=subservico_interface_leitura, args=(fila,), daemon=True)
         t_leitora.start()
 
         server_addr = (server_ip, porta)
@@ -74,27 +100,8 @@ def main():
             if valor is None:
                 break
 
-            pacote = protocolo.pack_req(id_req, valor)
-            sock.settimeout(TIMEOUT)
-
-            ack_ok = False
-            while not ack_ok:
-                sock.sendto(pacote, server_addr)
-                try:
-                    while True:
-                        resp, addr = sock.recvfrom(1024)
-                        if resp and resp[0] == protocolo.MSG_ACK:
-                            ack_id, num_reqs, total_sum = protocolo.unpack_ack(resp)
-                            if ack_id == id_req:
-                                ts = get_timestamp()
-                                print(f"{ts} server {server_ip} id_req {id_req} value {valor} num_reqs {num_reqs} total_sum {total_sum}", flush=True)
-                                id_req += 1
-                                ack_ok = True
-                                break
-                            elif ack_id < id_req:
-                                continue
-                except socket.timeout:
-                    continue
+            subservico_processamento(sock, server_addr, id_req, valor, server_ip)
+            id_req += 1
 
     except KeyboardInterrupt:
         pass
