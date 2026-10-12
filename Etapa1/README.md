@@ -66,3 +66,47 @@ printf "10\n20\n30\n" | python3 cliente.py 4000
 
 #### Encerrar
 Para finalizar o cliente ou o servidor, aperte `CTRL+C` (ou `CTRL+D` no cliente).
+
+---
+
+### Teste de Múltiplos Clientes no Docker (Recomendado)
+
+Para simular um ambiente distribuído real onde cada cliente possui um **endereço IP distinto**, execute o script automatizado na raiz do projeto:
+
+```bash
+# Executa 3 clientes concorrentes com 500 requisições cada (validação rápida):
+python test_docker.py -c 3 -r 500
+
+# Executa 5 clientes concorrentes com 1.000 requisições cada:
+python test_docker.py -c 5 -r 1000
+
+# Executa usando os arquivos inteiros (1 milhão de números cada):
+python test_docker.py -c 3 -r 0
+```
+
+O script:
+1. Constrói a imagem Docker.
+2. Cria a rede Docker bridge com IPs estáticos dedicados (`172.28.0.2` para o servidor, `172.28.0.11+` para clientes).
+3. Dispara os clientes simultaneamente usando `RAND_NUM_1.txt`, `RAND_NUM_2.txt`, etc.
+4. Valida se a soma e o total de requisições no servidor batem 100% com o esperado.
+5. Limpa automaticamente todos os contêineres e redes.
+
+---
+
+### Execução com Docker Compose
+
+Você também pode utilizar o `docker compose` diretamente:
+
+```bash
+# Subir o servidor e 3 clientes pré-configurados:
+docker compose up --build
+
+# Subir com limite de requisições por cliente (ex.: 500):
+MAX_REQS=500 docker compose up --build
+
+# Subir cliente interativo no terminal:
+docker compose run cliente_interativo
+
+# Finalizar e limpar contêineres:
+docker compose down
+```

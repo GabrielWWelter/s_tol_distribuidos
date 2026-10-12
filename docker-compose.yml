@@ -1,0 +1,81 @@
+networks:
+  sisop2_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+services:
+  servidor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "servidor.py", "4000"]
+    ports:
+      - "4000:4000/udp"
+    networks:
+      sisop2_net:
+        ipv4_address: 172.28.0.2
+
+  cliente1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "cliente.py", "4000", "RAND_NUM_1.txt", "${MAX_REQS:-1000}"]
+    depends_on:
+      - servidor
+    networks:
+      sisop2_net:
+        ipv4_address: 172.28.0.11
+
+  cliente2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "cliente.py", "4000", "RAND_NUM_2.txt", "${MAX_REQS:-1000}"]
+    depends_on:
+      - servidor
+    networks:
+      sisop2_net:
+        ipv4_address: 172.28.0.12
+
+  cliente3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "cliente.py", "4000", "RAND_NUM_3.txt", "${MAX_REQS:-1000}"]
+    depends_on:
+      - servidor
+    networks:
+      sisop2_net:
+        ipv4_address: 172.28.0.13
+
+  # Servico para escala dinamica:
+  # docker compose --profile scale up --scale cliente=5
+  cliente:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python3", "cliente.py", "4000", "RAND_NUM_1.txt", "${MAX_REQS:-1000}"]
+    depends_on:
+      - servidor
+    networks:
+      - sisop2_net
+    profiles:
+      - scale
+
+  # Servico para teste interativo no terminal:
+  # docker compose run cliente_interativo
+  cliente_interativo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    stdin_open: true
+    tty: true
+    command: ["python3", "cliente.py", "4000"]
+    depends_on:
+      - servidor
+    networks:
+      - sisop2_net
+    profiles:
+      - interactive

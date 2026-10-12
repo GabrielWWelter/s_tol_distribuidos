@@ -3,6 +3,7 @@ import socket
 import threading
 import queue
 from datetime import datetime
+import os
 import protocolo
 
 # tempo de espera para o protocolo stop-and-wait
@@ -18,17 +19,26 @@ def interface_resposta_recebida(server_ip, id_req, valor, num_reqs, total_sum):
     ts = get_timestamp()
     print(f"{ts} server {server_ip} id_req {id_req} value {valor} num_reqs {num_reqs} total_sum {total_sum}", flush=True)
 
-def subservico_interface_leitura(fila):
+def subservico_interface_leitura(fila, fonte_arquivo=None, max_reqs=None):
     try:
-        for linha in sys.stdin:
-            linha = linha.strip()
-            if linha:
-                try:
-                    valor = int(linha)
-                    if valor > 0: # valor positivo
-                        fila.put(valor) # add na fila
-                except ValueError:
-                    pass
+        iterador = open(fonte_arquivo, "r", encoding="utf-8") if fonte_arquivo else sys.stdin
+        total_lido = 0
+        try:
+            for linha in iterador:
+                if max_reqs is not None and total_lido >= max_reqs:
+                    break
+                linha = linha.strip()
+                if linha:
+                    try:
+                        valor = int(linha)
+                        if valor > 0: # valor positivo
+                            fila.put(valor) # add na fila
+                            total_lido += 1
+                    except ValueError:
+                        pass
+        finally:
+            if fonte_arquivo and iterador is not sys.stdin:
+                iterador.close()
     except Exception:
         pass
     finally:
@@ -38,6 +48,9 @@ def subservico_descoberta(sock, porta):
     msg = protocolo.pack_discovery()
     sock.settimeout(0.5) #500 ms
     destinos = [('<broadcast>', porta), ('127.0.0.1', porta)]
+    server_host = os.environ.get("SERVER_HOST")
+    if server_host:
+        destinos.insert(0, (server_host, porta))
 
     while True:
         # testa rede local e localhost
@@ -82,10 +95,22 @@ def subservico_processamento(sock, server_addr, id_req, valor, server_ip):
 
 def main():
     if len(sys.argv) < 2:
-        print(f"Uso: python3 {sys.argv[0]} <porta>")
+        print(f"Uso: python3 {sys.argv[0]} <porta> [arquivo_dados] [max_reqs]")
         sys.exit(1)
 
     porta = int(sys.argv[1]) # via linha de comando
+    arquivo_dados = sys.argv[2] if len(sys.argv) > 2 else os.environ.get("INPUT_FILE")
+    max_reqs = None
+    if len(sys.argv) > 3:
+        try:
+            max_reqs = int(sys.argv[3])
+        except ValueError:
+            pass
+    elif os.environ.get("MAX_REQS"):
+        try:
+            max_reqs = int(os.environ["MAX_REQS"])
+        except ValueError:
+            pass
 
     # cria socket UDP
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -99,7 +124,11 @@ def main():
         # para comunicação entre thread principal e leitora, sem condições de corrida
         fila = queue.Queue()
         # thread leitora
-        t_leitora = threading.Thread(target=subservico_interface_leitura, args=(fila,), daemon=True)
+        t_leitora = threading.Thread(
+            target=subservico_interface_leitura,
+            args=(fila, arquivo_dados, max_reqs),
+            daemon=True
+        )
         t_leitora.start()
 
         server_addr = (server_ip, porta)

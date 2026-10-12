@@ -1,7 +1,11 @@
 import sys
 import socket
+import os
 from datetime import datetime
 import protocolo
+
+# Se TRACK_BY_PORT=1, rastreia clientes por (IP, porta), permitindo múltiplos clientes no mesmo localhost
+TRACK_BY_PORT = os.environ.get("TRACK_BY_PORT") == "1"
 
 class EstadoServidor:
     def __init__(self):
@@ -25,18 +29,17 @@ def interface_requisicao_duplicada(client_ip, id_req, valor, num_reqs, total_sum
     ts = get_timestamp()
     print(f"{ts} client {client_ip} DUP!! id_req {id_req} value {valor} num_reqs {num_reqs} total_sum {total_sum}", flush=True)
 
-# se não existe o cliente, cria um novo
+# inicializa ou reinicia o cliente ao receber mensagem de descoberta
 # envia resposta de descoberta
-def subservico_descoberta(sock, addr, client_ip):
-    if client_ip not in estado.clientes:
-        estado.clientes[client_ip] = {
-            'last_req': 0,
-            'last_num_reqs': 0,
-            'last_total_sum': 0
-        }
+def subservico_descoberta(sock, addr, client_id):
+    estado.clientes[client_id] = {
+        'last_req': 0,
+        'last_num_reqs': estado.num_reqs,
+        'last_total_sum': estado.total_sum
+    }
     sock.sendto(protocolo.pack_discovery_resp(), addr)
 
-def subservico_processamento(sock, dados, addr, client_ip):
+def subservico_processamento(sock, dados, addr, client_id, client_ip):
     try:
         id_req, valor = protocolo.unpack_req(dados)
     except Exception:
@@ -44,14 +47,14 @@ def subservico_processamento(sock, dados, addr, client_ip):
 
     # se o servidor cair e for reiniciado enquanto clientes ainda estiverem ativos,
     # essa verificação permite que o servidor recupere o atendimento normal
-    if client_ip not in estado.clientes:
-        estado.clientes[client_ip] = {
+    if client_id not in estado.clientes:
+        estado.clientes[client_id] = {
             'last_req': 0,
             'last_num_reqs': 0,
             'last_total_sum': 0
         }
 
-    cliente = estado.clientes[client_ip]
+    cliente = estado.clientes[client_id]
 
     # caso o id_req seja o esperado
     if id_req == cliente['last_req'] + 1:
@@ -63,7 +66,8 @@ def subservico_processamento(sock, dados, addr, client_ip):
         cliente['last_num_reqs'] = estado.num_reqs
         cliente['last_total_sum'] = estado.total_sum
 
-        interface_nova_requisicao(client_ip, id_req, valor, estado.num_reqs, estado.total_sum)
+        display_id = client_id if TRACK_BY_PORT else client_ip
+        interface_nova_requisicao(display_id, id_req, valor, estado.num_reqs, estado.total_sum)
 
         # envia ack com o último id_req recebido, o número de requisições e a soma total
         ack = protocolo.pack_ack(id_req, estado.num_reqs, estado.total_sum)
@@ -71,7 +75,8 @@ def subservico_processamento(sock, dados, addr, client_ip):
 
     # caso o id_req não seja o esperado (requisição duplicada)
     elif id_req <= cliente['last_req']:
-        interface_requisicao_duplicada(client_ip, id_req, valor, cliente['last_num_reqs'], cliente['last_total_sum'])
+        display_id = client_id if TRACK_BY_PORT else client_ip
+        interface_requisicao_duplicada(display_id, id_req, valor, cliente['last_num_reqs'], cliente['last_total_sum'])
         ack = protocolo.pack_ack(cliente['last_req'], cliente['last_num_reqs'], cliente['last_total_sum'])
         sock.sendto(ack, addr)
 
@@ -105,13 +110,14 @@ def main():
 
             tipo = dados[0]
             client_ip = addr[0]
+            client_id = f"{addr[0]}:{addr[1]}" if TRACK_BY_PORT else addr[0]
 
             # broadcast de descoberta
             if tipo == protocolo.MSG_DISCOVERY:
-                subservico_descoberta(sock, addr, client_ip)
+                subservico_descoberta(sock, addr, client_id)
             # requisição de soma
             elif tipo == protocolo.MSG_REQ:
-                subservico_processamento(sock, dados, addr, client_ip)
+                subservico_processamento(sock, dados, addr, client_id, client_ip)
 
     except KeyboardInterrupt:
         pass
