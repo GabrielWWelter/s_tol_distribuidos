@@ -92,6 +92,7 @@ def main():
     # permite broadcast
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
+    server_addr = None
     try:
         server_ip = subservico_descoberta(sock, porta)
         interface_servidor_descoberto(server_ip)
@@ -121,6 +122,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if 'server_addr' in locals():
+            sock.sendto(protocolo.pack_ext(0, 0), server_addr)
         sock.close()
 
 if __name__ == "__main__":

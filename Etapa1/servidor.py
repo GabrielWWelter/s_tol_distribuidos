@@ -25,6 +25,10 @@ def interface_requisicao_duplicada(client_ip, id_req, valor, num_reqs, total_sum
     ts = get_timestamp()
     print(f"{ts} client {client_ip} DUP!! id_req {id_req} value {valor} num_reqs {num_reqs} total_sum {total_sum}", flush=True)
 
+def interface_requisicao_ext(client_ip, id_req, valor, num_reqs, total_sum):
+    ts = get_timestamp()
+    print(f"{ts} client {client_ip} EXT!! id_req {id_req} value {valor} num_reqs {num_reqs} total_sum {total_sum}", flush=True)
+
 # se não existe o cliente, cria um novo
 # envia resposta de descoberta
 def subservico_descoberta(sock, addr, client_ip):
@@ -112,6 +116,11 @@ def main():
             # requisição de soma
             elif tipo == protocolo.MSG_REQ:
                 subservico_processamento(sock, dados, addr, client_ip)
+            elif tipo == protocolo.MSG_EXT:
+                id_req, valor = protocolo.unpack_req(dados)
+                interface_requisicao_ext(client_ip, id_req, valor, estado.num_reqs, estado.total_sum)
+                ack = protocolo.pack_ack(estado.num_reqs, estado.num_reqs, estado.total_sum)
+                sock.sendto(ack, addr)
 
     except KeyboardInterrupt:
         pass

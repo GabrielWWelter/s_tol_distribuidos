@@ -4,6 +4,8 @@ MSG_DISCOVERY = 1
 MSG_DISCOVERY_RESP = 2
 MSG_REQ = 3
 MSG_ACK = 4
+MSG_EXT = 5
+
 
 '''
 Ordenação Big-Endian (!) para garantir que todos os computadores interpretem da mesma forma
@@ -37,3 +39,6 @@ def pack_ack(id_req, num_reqs, total_sum):
 def unpack_ack(dados):
     _, id_req, num_reqs, total_sum = struct.unpack("!BQQQ", dados)
     return id_req, num_reqs, total_sum
+
+def pack_ext(id_req, valor):
+    return struct.pack("!BQQ", MSG_EXT, id_req, valor)
