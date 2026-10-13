@@ -99,19 +99,22 @@ def main():
 
     try:
         while True:
-            dados, addr = sock.recvfrom(1024) 
-            if not dados:
+            try:
+                dados, addr = sock.recvfrom(1024) 
+                if not dados:
+                    continue
+
+                tipo = dados[0]
+                client_ip = addr[0]
+
+                # broadcast de descoberta
+                if tipo == protocolo.MSG_DISCOVERY:
+                    subservico_descoberta(sock, addr, client_ip)
+                # requisição de soma
+                elif tipo == protocolo.MSG_REQ:
+                    subservico_processamento(sock, dados, addr, client_ip)
+            except OSError:
                 continue
-
-            tipo = dados[0]
-            client_ip = addr[0]
-
-            # broadcast de descoberta
-            if tipo == protocolo.MSG_DISCOVERY:
-                subservico_descoberta(sock, addr, client_ip)
-            # requisição de soma
-            elif tipo == protocolo.MSG_REQ:
-                subservico_processamento(sock, dados, addr, client_ip)
 
     except KeyboardInterrupt:
         pass
