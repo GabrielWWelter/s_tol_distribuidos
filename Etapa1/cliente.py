@@ -25,7 +25,7 @@ def subservico_interface_leitura(fila):
             if linha:
                 try:
                     valor = int(linha)
-                    if valor > 0: # valor positivo
+                    if 0 < valor <= 0xFFFFFFFFFFFFFFFF: # valor positivo de 64 bits
                         fila.put(valor) # add na fila
                 except ValueError:
                     pass
@@ -52,7 +52,7 @@ def subservico_descoberta(sock, porta):
             # se receber dados, e for do tipo descoberta, retorna o IP o servidor
             if dados and dados[0] == protocolo.MSG_DISCOVERY_RESP:
                 return addr[0]
-        except socket.timeout:
+        except (socket.timeout, TimeoutError, OSError):
             continue
 
 
@@ -61,14 +61,17 @@ def subservico_processamento(sock, server_addr, id_req, valor, server_ip):
     sock.settimeout(TIMEOUT)
 
     while True:
-        # envia o pacote para o servidor
-        sock.sendto(pacote, server_addr)
         try:
+            # envia o pacote para o servidor
+            sock.sendto(pacote, server_addr)
             while True:
                 resp, addr = sock.recvfrom(1024)
                 # se receber um pacote do tipo ACK, desempacota
                 if resp and resp[0] == protocolo.MSG_ACK:
-                    ack_id, num_reqs, total_sum = protocolo.unpack_ack(resp)
+                    try:
+                        ack_id, num_reqs, total_sum = protocolo.unpack_ack(resp)
+                    except Exception:
+                        continue
                     # se o id_req do ack for o mesmo que o enviado, imprime a resposta
                     if ack_id == id_req:
                         interface_resposta_recebida(server_ip, id_req, valor, num_reqs, total_sum)
@@ -76,8 +79,8 @@ def subservico_processamento(sock, server_addr, id_req, valor, server_ip):
                     # se o id_req do ack for menor ao enviado, descarta e continua esperando por até 10 ms
                     elif ack_id < id_req:
                         continue
-        except socket.timeout: 
-            # se o timeout de 10 ms expirar, reenvia o pacote
+        except (socket.timeout, TimeoutError, OSError): 
+            # se o timeout de 10 ms expirar ou houver erro temporario de rede, reenvia o pacote
             continue
 
 def main():
