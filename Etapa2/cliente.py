@@ -8,6 +8,7 @@ import protocolo
 
 # tempo de espera para o protocolo stop-and-wait
 TIMEOUT = 0.010 # 10 milisegundos
+TENTATIVAS_ANTES_REDESCOBERTA = 100 # valor arbitário, talvez mudar isso quando definir o heartbeat
 
 def get_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -67,11 +68,19 @@ def subservico_descoberta(sock, porta):
 def subservico_processamento(sock, server_addr, client_id, id_req, valor, server_ip):
     pacote = protocolo.pack_req(client_id, id_req, valor)
     sock.settimeout(TIMEOUT)
+    tentativas = 0
 
     while True:
+        if tentativas == TENTATIVAS_ANTES_REDESCOBERTA:
+            server_ip = subservico_descoberta(sock, server_addr[1])
+            server_addr = (server_ip, server_addr[1])
+            interface_servidor_descoberto(server_ip)
+            sock.settimeout(TIMEOUT)
+            tentativas = 0
         try:
             # envia o pacote para o servidor
             sock.sendto(pacote, server_addr)
+            tentativas += 1
             while True:
                 resp, addr = sock.recvfrom(1024)
                 # se receber um pacote do tipo ACK, desempacota
@@ -86,7 +95,7 @@ def subservico_processamento(sock, server_addr, client_id, id_req, valor, server
                     # se o id_req do ack for o mesmo que o enviado, imprime a resposta
                     if ack_id == id_req:
                         interface_resposta_recebida(server_ip, id_req, valor, num_reqs, total_sum)
-                        return
+                        return server_addr
                     # se o id_req do ack for menor ao enviado, descarta e continua esperando por até 10 ms
                     elif ack_id < id_req:
                         continue
@@ -130,7 +139,7 @@ def main():
                 break
 
             # passa um número da fila para processamento
-            subservico_processamento(sock, server_addr, client_id, id_req, valor, server_ip)
+            server_addr = subservico_processamento(sock, server_addr, client_id, id_req, valor, server_addr[0])
             id_req += 1
 
     except KeyboardInterrupt:

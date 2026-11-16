@@ -1,4 +1,5 @@
 import os
+import socket
 import sys
 import unittest
 from unittest import mock
@@ -21,7 +22,10 @@ class SocketFalso:
         self.enviados.append((pacote, destino))
 
     def recvfrom(self, _):
-        return next(self.respostas), ("127.0.0.1", 4000)
+        resposta = next(self.respostas)
+        if isinstance(resposta, Exception):
+            raise resposta
+        return resposta, ("127.0.0.1", 4000)
 
 
 class TestClienteEtapa2(unittest.TestCase):
@@ -54,6 +58,36 @@ class TestClienteEtapa2(unittest.TestCase):
             protocolo.unpack_req(pacote), (client_id, id_req, valor)
         )
         interface.assert_called_once_with(destino[0], id_req, valor, 4, 125)
+
+    def test_fe_sem_resposta_redescobre_e_reenvia_a_mesma_requisicao(self):
+        client_id = 1001
+        id_req = 7
+        valor = 50
+        fe_antigo = ("10.0.0.5", 4000)
+        fe_novo = ("10.0.0.9", 4000)
+        ack = protocolo.pack_ack(client_id, id_req, 4, 125)
+        sock = SocketFalso([socket.timeout(), socket.timeout(), ack])
+
+        with mock.patch.object(cliente, "TENTATIVAS_ANTES_REDESCOBERTA", 2), \
+                mock.patch("cliente.subservico_descoberta", return_value=fe_novo[0]) as descoberta, \
+                mock.patch("cliente.interface_servidor_descoberto"), \
+                mock.patch("cliente.interface_resposta_recebida") as interface:
+            retorno = cliente.subservico_processamento(
+                sock, fe_antigo, client_id, id_req, valor, fe_antigo[0]
+            )
+
+        descoberta.assert_called_once_with(sock, 4000)
+        self.assertEqual(retorno, fe_novo)
+        self.assertEqual(
+            [destino for _, destino in sock.enviados],
+            [fe_antigo, fe_antigo, fe_novo],
+        )
+        for pacote, _ in sock.enviados:
+            self.assertEqual(
+                protocolo.unpack_req(pacote), (client_id, id_req, valor)
+            )
+        self.assertEqual(sock.timeout, cliente.TIMEOUT)
+        interface.assert_called_once_with(fe_novo[0], id_req, valor, 4, 125)
 
 
 if __name__ == "__main__":
