@@ -6,6 +6,10 @@ MSG_DISCOVERY_RESP = 2
 MSG_REQ = 3
 MSG_ACK = 4
 
+'''
+Ordenação Big-Endian (!) para garantir que todos os computadores interpretem da mesma forma
+'''
+
 # 1 byte identificador de mensagem
 def pack_discovery():
     return struct.pack("!B", MSG_DISCOVERY)
@@ -14,26 +18,30 @@ def pack_discovery():
 def pack_discovery_resp():
     return struct.pack("!B", MSG_DISCOVERY_RESP)
 
-# 1 byte identificador de mensagem, 
-# 8 bytes id_req (unsigned int 64 bits), 
+# Adaptado da Etapa 1: acrescenta 8 bytes de client_id.
+# 1 byte identificador de mensagem,
+# 8 bytes client_id (unsigned int 64 bits),
+# 8 bytes id_req (unsigned int 64 bits),
 # 8 bytes valor (unsigned int 64 bits)
-def pack_req(id_req, valor):
-    return struct.pack("!BQQ", MSG_REQ, id_req, valor)
+def pack_req(client_id, id_req, valor):
+    return struct.pack("!BQQQ", MSG_REQ, client_id, id_req, valor)
 
 def unpack_req(dados):
-    _, id_req, valor = struct.unpack("!BQQ", dados)
-    return id_req, valor
+    _, client_id, id_req, valor = struct.unpack("!BQQQ", dados)
+    return client_id, id_req, valor
 
-# 1 byte identificador de mensagem, 
-# 8 bytes id_req (unsigned int 64 bits), 
-# 8 bytes num_reqs (unsigned int 64 bits), 
+# Adaptado da Etapa 1: acrescenta 8 bytes de client_id.
+# 1 byte identificador de mensagem,
+# 8 bytes client_id (unsigned int 64 bits),
+# 8 bytes id_req (unsigned int 64 bits),
+# 8 bytes num_reqs (unsigned int 64 bits),
 # 8 bytes total_sum (unsigned int 64 bits)
-def pack_ack(id_req, num_reqs, total_sum):
-    return struct.pack("!BQQQ", MSG_ACK, id_req, num_reqs, total_sum)
+def pack_ack(client_id, id_req, num_reqs, total_sum):
+    return struct.pack("!BQQQQ", MSG_ACK, client_id, id_req, num_reqs, total_sum)
 
 def unpack_ack(dados):
-    _, id_req, num_reqs, total_sum = struct.unpack("!BQQQ", dados)
-    return id_req, num_reqs, total_sum
+    _, client_id, id_req, num_reqs, total_sum = struct.unpack("!BQQQQ", dados)
+    return client_id, id_req, num_reqs, total_sum
 
 
 # --------- etapa2 -----------
@@ -54,21 +62,22 @@ COLOR_FAIL = "\033[91m"      # vermelho (Falhas/Timeouts)
 def colorir(texto, cor):
     return f"{cor}{texto}{COLOR_RESET}"
 
-# 1 byte tipo, 8 bytes seq_id, 8 bytes id_req, 8 bytes valor
-def pack_order_multicast(seq_id, id_req, valor):
-    return struct.pack("!BQQQ", MSG_ORDER_MULTICAST, seq_id, id_req, valor)
+# 1 byte tipo, 8 bytes seq_id, 8 bytes client_id, 8 bytes id_req, 8 bytes valor
+def pack_order_multicast(seq_id, client_id, id_req, valor):
+    return struct.pack("!BQQQQ", MSG_ORDER_MULTICAST, seq_id, client_id, id_req, valor)
 
 def unpack_order_multicast(dados):
-    _, seq_id, id_req, valor = struct.unpack("!BQQQ", dados)
-    return seq_id, id_req, valor
+    _, seq_id, client_id, id_req, valor = struct.unpack("!BQQQQ", dados)
+    return seq_id, client_id, id_req, valor
 
-# 1 byte tipo, 8 bytes seq_id, 8 bytes id_req, 8 bytes num_reqs, 8 bytes total_sum, 4 bytes rm_id
-def pack_rm_ack(seq_id, id_req, num_reqs, total_sum, rm_id):
-    return struct.pack("!BQQQQI", MSG_RM_ACK, seq_id, id_req, num_reqs, total_sum, rm_id)
+# 1 byte tipo, 8 bytes seq_id, 8 bytes client_id, 8 bytes id_req,
+# 8 bytes num_reqs, 8 bytes total_sum, 4 bytes rm_id
+def pack_rm_ack(seq_id, client_id, id_req, num_reqs, total_sum, rm_id):
+    return struct.pack("!BQQQQQI", MSG_RM_ACK, seq_id, client_id, id_req, num_reqs, total_sum, rm_id)
 
 def unpack_rm_ack(dados):
-    _, seq_id, id_req, num_reqs, total_sum, rm_id = struct.unpack("!BQQQQI", dados)
-    return seq_id, id_req, num_reqs, total_sum, rm_id
+    _, seq_id, client_id, id_req, num_reqs, total_sum, rm_id = struct.unpack("!BQQQQQI", dados)
+    return seq_id, client_id, id_req, num_reqs, total_sum, rm_id
 
 # 1 byte tipo, 4 bytes leader_id, 8 bytes last_seq
 def pack_heartbeat(leader_id, last_seq):
