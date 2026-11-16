@@ -50,6 +50,7 @@ MSG_RM_ACK = 11
 MSG_HEARTBEAT = 12
 MSG_ELECTION = 20
 MSG_COORDINATOR = 21
+MSG_ELECTION_ACK = 22
 
 # logs
 COLOR_RESET = "\033[0m"
@@ -102,3 +103,10 @@ def pack_coordinator(leader_id):
 def unpack_coordinator(dados):
     _, leader_id = struct.unpack("!BI", dados)
     return leader_id
+
+def pack_election_ack(sender_id):
+    return struct.pack("!BI", MSG_ELECTION_ACK, sender_id)
+
+def unpack_election_ack(dados):
+    _, sender_id = struct.unpack("!BI", dados)
+    return sender_id

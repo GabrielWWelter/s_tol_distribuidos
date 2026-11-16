@@ -88,6 +88,11 @@ class TestProtocoloEtapa2(unittest.TestCase):
         coord = protocolo.pack_coordinator(highest_id)
         self.assertEqual(protocolo.unpack_coordinator(coord), highest_id)
 
+    def test_confirmacao_de_eleicao_identifica_quem_recebeu(self):
+        ack = protocolo.pack_election_ack(0xC0A80001)
+        self.assertEqual(ack[0], protocolo.MSG_ELECTION_ACK)
+        self.assertEqual(protocolo.unpack_election_ack(ack), 0xC0A80001)
+
     def test_cores_ansi(self):
         texto = protocolo.colorir("TESTE", protocolo.COLOR_FE)
         self.assertTrue(texto.startswith(protocolo.COLOR_FE))
