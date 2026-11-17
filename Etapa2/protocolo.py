@@ -1,3 +1,4 @@
+import socket
 import struct
 
 # etapa1
@@ -48,6 +49,8 @@ def unpack_ack(dados):
 MSG_ORDER_MULTICAST = 10
 MSG_RM_ACK = 11
 MSG_HEARTBEAT = 12
+MSG_NACK = 13
+MSG_DISCOVERY_FWD = 14
 MSG_ELECTION = 20
 MSG_COORDINATOR = 21
 
@@ -102,3 +105,20 @@ def pack_coordinator(leader_id):
 def unpack_coordinator(dados):
     _, leader_id = struct.unpack("!BI", dados)
     return leader_id
+
+# Protocolos de NACK para evitar que um RM trave permanentemente em caso de perda de pacotes
+def pack_nack(expected_seq, rm_id):
+    return struct.pack("!BQI", MSG_NACK, expected_seq, rm_id)
+
+def unpack_nack(dados):
+    _, expected_seq, rm_id = struct.unpack("!BQI", dados)
+    return expected_seq, rm_id
+
+# Encaminhamento de descoberta broadcast recebida por um RM para o FE
+# 1 byte tipo, 4 bytes client_ip (IPv4), 2 bytes client_port
+def pack_discovery_fwd(client_ip, client_port):
+    return struct.pack("!B4sH", MSG_DISCOVERY_FWD, socket.inet_aton(client_ip), client_port)
+
+def unpack_discovery_fwd(dados):
+    _, ip_bytes, client_port = struct.unpack("!B4sH", dados)
+    return socket.inet_ntoa(ip_bytes), client_port

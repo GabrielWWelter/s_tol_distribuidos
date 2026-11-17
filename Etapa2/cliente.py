@@ -44,24 +44,27 @@ def subservico_interface_leitura(fila):
 
 def subservico_descoberta(sock, porta):
     msg = protocolo.pack_discovery()
-    sock.settimeout(0.5) #500 ms
-    destinos = [('<broadcast>', porta), ('127.0.0.1', porta)]
+    sock.settimeout(0.5) # 500 ms
+    destinos = [
+        ('<broadcast>', porta),
+        ('127.255.255.255', porta),
+        ('127.0.0.1', porta),
+    ]
 
     while True:
-        # testa rede local e localhost
+        # envia broadcast na rede local e no loopback
         for dest in destinos:
             try:
                 sock.sendto(msg, dest)
             except OSError:
                 pass
-        try:
-            # payload, endereço (ip, porta)
-            dados, addr = sock.recvfrom(1024)
-            # se receber dados, e for do tipo descoberta, retorna o IP o servidor
-            if dados and dados[0] == protocolo.MSG_DISCOVERY_RESP:
-                return addr[0]
-        except (socket.timeout, TimeoutError, OSError):
-            continue
+        while True:
+            try:
+                dados, addr = sock.recvfrom(1024)
+                if dados and dados[0] == protocolo.MSG_DISCOVERY_RESP:
+                    return addr[0]
+            except (socket.timeout, TimeoutError, OSError):
+                break
 
 
 def subservico_processamento(sock, server_addr, client_id, id_req, valor, server_ip):

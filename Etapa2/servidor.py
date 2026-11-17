@@ -20,22 +20,31 @@ class ServidorReplicado:
         self.port_cluster = port_cluster
         self.ips_cluster = ips_cluster
 
-        # Mapeia cada node_id para uma tupla (ip, port_cluster) de todos os participantes do cluster
         self.nos_cluster = {ip_para_id(ip): (ip, port_cluster) for ip in ips_cluster}
-        # Elege como líder o nó de maior IP numérico
+        self.nos_cluster[self.node_id] = (ip_maq, port_cluster)
         self.leader_id = max(self.nos_cluster.keys())
 
-        # Canal Externo = Clientes <-> FE
+        # Canal Externo Unicast: ligado ao IP específico da máquina para responder
+        # descobertas com o IP correto do FE e receber MSG_REQ diretamente
         self.sock_cliente = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_cliente.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Possibilitar testes em uma mesma máquina (APAGAR DEPOIS)
+        self.sock_cliente.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock_cliente.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.sock_cliente.bind((self.ip_maq, self.port_cliente))
 
-        # Canal Intra-Cluster = FE <-> RM
+        # Canal Externo Broadcast: ligado em "" (0.0.0.0) para capturar pacotes
+        # enviados para 255.255.255.255 ou broadcast da sub-rede
+        self.sock_broadcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock_broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            self.sock_broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self.sock_broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        self.sock_broadcast.bind(("", self.port_cliente))
+
+        # Canal Intra-Cluster: FE <-> RMs
         self.sock_cluster = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock_cluster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Possibilitar testes em uma mesma máquina (APAGAR DEPOIS)
+        self.sock_cluster.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock_cluster.bind((self.ip_maq, self.port_cluster))
 
-        # Módulos especializados
         self.fe = FrontEnd(
             self.ip_maq,
             self.node_id,
@@ -54,32 +63,64 @@ class ServidorReplicado:
     def is_leader(self):
         return self.node_id == self.leader_id
 
+    def _encaminhar_descoberta_ao_lider(self, addr):
+        """Encaminha pedido de descoberta recebido por um RM para que o FE responda."""
+        fe_addr = self.nos_cluster.get(self.leader_id)
+        if fe_addr is None:
+            return
+        try:
+            pct = protocolo.pack_discovery_fwd(addr[0], addr[1])
+            self.sock_cluster.sendto(pct, fe_addr)
+        except OSError:
+            pass
+
+    def loop_broadcast_cliente(self):
+        """Escuta pacotes de descobrimento por broadcast na porta do cliente."""
+        while True:
+            try:
+                dados, addr = self.sock_broadcast.recvfrom(1024)
+            except OSError:
+                continue
+
+            if not dados or dados[0] != protocolo.MSG_DISCOVERY:
+                continue
+
+            if self.is_leader():
+                self.fe.responder_descoberta(addr)
+            else:
+                self._encaminhar_descoberta_ao_lider(addr)
+
     def loop_canal_cliente(self):
-        """Escuta o canal externo e dispara uma thread por requisição no FE"""
+        """Escuta o canal unicast externo e cria uma thread por requisição recebida."""
         while True:
             try:
                 dados, addr = self.sock_cliente.recvfrom(1024)
             except OSError:
                 continue
 
-            if not self.is_leader() or not dados:
+            if not dados:
                 continue
 
-            t = threading.Thread(
+            if not self.is_leader():
+                if dados[0] == protocolo.MSG_DISCOVERY:
+                    self._encaminhar_descoberta_ao_lider(addr)
+                continue
+
+            threading.Thread(
                 target=self.fe.processar_requisicao_cliente,
                 args=(dados, addr, self.is_leader),
                 daemon=True,
-            )
-            t.start()
+            ).start()
 
     def monitorar_rms(self):
-        """Monitora periodicamente a vitalidade dos RMs quando atua como FE"""
+        """Monitora periodicamente a vitalidade dos RMs quando atua como FE."""
         while True:
             time.sleep(0.5)
             if self.is_leader():
                 self.fe.verificar_timeouts_rms()
 
     def iniciar(self):
+        threading.Thread(target=self.loop_broadcast_cliente, daemon=True).start()
         threading.Thread(target=self.loop_canal_cliente, daemon=True).start()
         threading.Thread(target=self.monitorar_rms, daemon=True).start()
 
@@ -88,7 +129,7 @@ class ServidorReplicado:
             print(
                 protocolo.colorir(
                     f"[FE {self.ip_maq}] Ativo como Front-End | "
-                    f"Quórum atual: {self.fe.calcular_quorum()}/{len(self.fe.rms_ativos)}",
+                    f"Quórum atual: {self.fe.formatar_quorum()}",
                     protocolo.COLOR_LEADER,
                 ),
                 flush=True,
@@ -117,9 +158,18 @@ class ServidorReplicado:
                     self.rm.tratar_order_multicast(dados, addr, self.leader_id)
                 elif tipo == protocolo.MSG_RM_ACK and self.is_leader():
                     self.fe.tratar_rm_ack(dados)
+                elif tipo == protocolo.MSG_NACK and self.is_leader():
+                    self.fe.tratar_nack(dados, addr)
+                elif tipo == protocolo.MSG_DISCOVERY_FWD and self.is_leader():
+                    try:
+                        client_addr = protocolo.unpack_discovery_fwd(dados)
+                        self.fe.responder_descoberta(client_addr)
+                    except Exception:
+                        pass
         except KeyboardInterrupt:
             pass
         finally:
+            self.sock_broadcast.close()
             self.sock_cliente.close()
             self.sock_cluster.close()
 
