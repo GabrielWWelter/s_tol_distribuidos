@@ -53,6 +53,7 @@ MSG_NACK = 13
 MSG_DISCOVERY_FWD = 14
 MSG_ELECTION = 20
 MSG_COORDINATOR = 21
+MSG_ELECTION_ACK = 22
 
 # logs
 COLOR_RESET = "\033[0m"
@@ -122,3 +123,9 @@ def pack_discovery_fwd(client_ip, client_port):
 def unpack_discovery_fwd(dados):
     _, ip_bytes, client_port = struct.unpack("!B4sH", dados)
     return socket.inet_ntoa(ip_bytes), client_port
+def pack_election_ack(sender_id):
+    return struct.pack("!BI", MSG_ELECTION_ACK, sender_id)
+
+def unpack_election_ack(dados):
+    _, sender_id = struct.unpack("!BI", dados)
+    return sender_id
