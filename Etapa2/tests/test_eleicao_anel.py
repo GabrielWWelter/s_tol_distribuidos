@@ -6,17 +6,18 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from eleicao_anel import ip_para_id, sucessor, tratar_eleicao
 
 
-def eleger(ids, iniciador, inativos=()):
-    participantes = {iniciador}
+def eleger(ids, iniciador, inativos=(), queda=None):
+    inativos = set(inativos)
     candidato = iniciador
     atual = sucessor(ids, iniciador, inativos)
     if atual is None:
         return iniciador
-    for _ in range(3 * len(ids)):
-        acao, candidato = tratar_eleicao(atual, candidato, atual in participantes)
+    for passo in range(3 * len(ids)):
+        if queda is not None and passo == queda[0]:
+            inativos.add(queda[1])
+        acao, candidato = tratar_eleicao(atual, candidato, inativos)
         if acao == "eleito":
             return candidato
-        participantes.add(atual)
         atual = sucessor(ids, atual, inativos)
     raise AssertionError("eleição não convergiu")
 
@@ -49,16 +50,16 @@ class TestSucessor(unittest.TestCase):
 
 class TestTratarEleicao(unittest.TestCase):
     def test_repassa_candidato_maior(self):
-        self.assertEqual(tratar_eleicao(20, 30, False), ("repassar", 30))
+        self.assertEqual(tratar_eleicao(20, 30), ("repassar", 30))
 
     def test_troca_candidato_menor_pelo_proprio_id(self):
-        self.assertEqual(tratar_eleicao(20, 10, False), ("repassar", 20))
+        self.assertEqual(tratar_eleicao(20, 10), ("repassar", 20))
 
-    def test_participante_descarta_candidato_menor(self):
-        self.assertEqual(tratar_eleicao(20, 10, True), ("descartar", None))
+    def test_troca_candidato_inativo_pelo_proprio_id(self):
+        self.assertEqual(tratar_eleicao(20, 30, inativos={30}), ("repassar", 20))
 
     def test_proprio_id_de_volta_elege(self):
-        self.assertEqual(tratar_eleicao(20, 20, True), ("eleito", 20))
+        self.assertEqual(tratar_eleicao(20, 20), ("eleito", 20))
 
 
 class TestConvergencia(unittest.TestCase):
@@ -75,6 +76,11 @@ class TestConvergencia(unittest.TestCase):
     def test_quedas_sucessivas_elegem_maior_restante(self):
         inativos = {self.ids[4], self.ids[3], self.ids[1]}
         self.assertEqual(eleger(self.ids, self.ids[0], inativos), self.ids[2])
+
+    def test_queda_do_candidato_durante_a_eleicao_elege_maior_restante(self):
+        inativos = {self.ids[4]}
+        queda = (3, self.ids[3])
+        self.assertEqual(eleger(self.ids, self.ids[0], inativos, queda), self.ids[2])
 
     def test_unico_ativo_se_elege(self):
         self.assertEqual(eleger(self.ids, self.ids[0], set(self.ids[1:])), self.ids[0])

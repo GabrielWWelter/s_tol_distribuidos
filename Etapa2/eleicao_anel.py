@@ -15,11 +15,9 @@ def sucessor(ids, meu_id, inativos=()):
     return None
 
 
-def tratar_eleicao(meu_id, highest_id, participante):
+def tratar_eleicao(meu_id, highest_id, inativos=()):
+    if highest_id in inativos or highest_id < meu_id:
+        return "repassar", meu_id
     if highest_id == meu_id:
         return "eleito", meu_id
-    if highest_id > meu_id:
-        return "repassar", highest_id
-    if participante:
-        return "descartar", None
-    return "repassar", meu_id
+    return "repassar", highest_id
