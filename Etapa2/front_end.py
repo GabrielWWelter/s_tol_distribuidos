@@ -250,6 +250,7 @@ class FrontEnd:
 
     def verificar_timeouts_rms(self, timeout_rm=2.0):
         agora = time.monotonic()
+        alterou = False
         with self.lock_fe:
             falhos = [
                 rm_id
@@ -258,15 +259,30 @@ class FrontEnd:
                 and (agora - self.aguardando_desde[rm_id]) > timeout_rm
             ]
             for rm_id in falhos:
-                self._marcar_rm(rm_id, False)
+                if self._marcar_rm(rm_id, False):
+                    alterou = True
+        return alterou
+
+    def adicionar_rm(self, rm_id, ip_rm, port_cluster):
+        with self.lock_fe:
+            self.nos_cluster[rm_id] = (ip_rm, port_cluster)
+            return self._marcar_rm(rm_id, True)
+
+    def obter_ips_cluster(self):
+        with self.lock_fe:
+            ips = [self.ip_maq]
+            for rm_id in sorted(self.rms_ativos):
+                if rm_id in self.nos_cluster:
+                    ips.append(self.nos_cluster[rm_id][0])
+            return ips
 
     def marcar_rm(self, rm_id, ativo):
         with self.lock_fe:
-            self._marcar_rm(rm_id, ativo)
+            return self._marcar_rm(rm_id, ativo)
 
     def _marcar_rm(self, rm_id, ativo):
         if rm_id == self.node_id or (rm_id in self.rms_ativos) == ativo:
-            return
+            return False
         if ativo:
             self.rms_ativos.add(rm_id)
             self.ultimo_contato_rm[rm_id] = time.monotonic()
@@ -288,3 +304,4 @@ class FrontEnd:
             ),
             flush=True,
         )
+        return True

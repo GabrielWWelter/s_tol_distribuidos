@@ -99,5 +99,28 @@ class TestProtocoloEtapa2(unittest.TestCase):
         self.assertTrue(texto.endswith(protocolo.COLOR_RESET))
 
 
+    def test_descoberta_servidor_e_join(self):
+        s_id = 12345
+        msg_disc = protocolo.pack_server_discovery(s_id)
+        self.assertEqual(protocolo.unpack_server_discovery(msg_disc), s_id)
+
+        l_id = 999
+        msg_resp = protocolo.pack_server_discovery_resp(l_id)
+        self.assertEqual(protocolo.unpack_server_discovery_resp(msg_resp), l_id)
+
+        rm_id = 100
+        porta = 5000
+        msg_join = protocolo.pack_rm_join(rm_id, porta)
+        self.assertEqual(protocolo.unpack_rm_join(msg_join), (rm_id, porta))
+
+    def test_topologia(self):
+        lider_id = 10
+        ips = ["127.0.0.1", "127.0.0.2", "127.0.0.3"]
+        pct = protocolo.pack_topology(lider_id, ips)
+        ret_lider, ret_ips = protocolo.unpack_topology(pct)
+        self.assertEqual(ret_lider, lider_id)
+        self.assertEqual(ret_ips, ips)
+
+
 if __name__ == "__main__":
     unittest.main()

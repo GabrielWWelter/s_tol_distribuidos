@@ -51,6 +51,10 @@ MSG_RM_ACK = 11
 MSG_HEARTBEAT = 12
 MSG_NACK = 13
 MSG_DISCOVERY_FWD = 14
+MSG_TOPOLOGY = 15
+MSG_SERVER_DISCOVERY = 16
+MSG_SERVER_DISCOVERY_RESP = 17
+MSG_RM_JOIN = 18
 MSG_ELECTION = 20
 MSG_COORDINATOR = 21
 MSG_ELECTION_ACK = 22
@@ -129,3 +133,44 @@ def pack_election_ack(sender_id):
 def unpack_election_ack(dados):
     _, sender_id = struct.unpack("!BI", dados)
     return sender_id
+
+# 1 byte tipo, 4 bytes sender_id
+def pack_server_discovery(sender_id):
+    return struct.pack("!BI", MSG_SERVER_DISCOVERY, sender_id)
+
+def unpack_server_discovery(dados):
+    _, sender_id = struct.unpack("!BI", dados)
+    return sender_id
+
+# 1 byte tipo, 4 bytes leader_id
+def pack_server_discovery_resp(leader_id):
+    return struct.pack("!BI", MSG_SERVER_DISCOVERY_RESP, leader_id)
+
+def unpack_server_discovery_resp(dados):
+    _, leader_id = struct.unpack("!BI", dados)
+    return leader_id
+
+# 1 byte tipo, 4 bytes rm_id, 2 bytes cluster_port
+def pack_rm_join(rm_id, cluster_port):
+    return struct.pack("!BIH", MSG_RM_JOIN, rm_id, cluster_port)
+
+def unpack_rm_join(dados):
+    _, rm_id, cluster_port = struct.unpack("!BIH", dados)
+    return rm_id, cluster_port
+
+# 1 byte tipo, 4 bytes leader_id, 2 bytes qtd_nos, lista de IPs (4 bytes cada)
+def pack_topology(leader_id, ip_list):
+    payload = struct.pack("!BIH", MSG_TOPOLOGY, leader_id, len(ip_list))
+    for ip in ip_list:
+        payload += socket.inet_aton(ip)
+    return payload
+
+def unpack_topology(dados):
+    _, leader_id, qtd = struct.unpack("!BIH", dados[:7])
+    ips = []
+    offset = 7
+    for _ in range(qtd):
+        ip_str = socket.inet_ntoa(dados[offset : offset + 4])
+        ips.append(ip_str)
+        offset += 4
+    return leader_id, ips
