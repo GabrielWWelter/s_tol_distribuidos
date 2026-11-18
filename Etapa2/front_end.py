@@ -15,6 +15,7 @@ class FrontEnd:
         self.next_seq = 1
         self.op_to_seq = {}  # (id_cliente, id_req) -> seq_id
         self.operacoes = {}  # seq_id -> registro de controle e quórum
+        self.pendentes = set()  # seq_id ainda sem quórum atingido
 
         # O nó atuando como FE não integra o conjunto de RMs ativos
         self.rms_ativos = {no_id for no_id in self.nos_cluster if no_id != leader_id}
@@ -33,13 +34,30 @@ class FrontEnd:
         m = len(self.rms_ativos)
         return f"{q if q is not None else '-'}/{m}"
 
-    def ativar(self, seq_inicial):
+    def obter_proximo_seq(self):
+        with self.lock_fe:
+            return self.next_seq
+
+    def ativar(self, seq_inicial, historico, rms_ativos):
         """Prepara o FE quando este nó vence uma eleição de líder."""
         with self.lock_fe:
             self.next_seq = seq_inicial
             self.op_to_seq.clear()
             self.operacoes.clear()
-            self.rms_ativos = {no_id for no_id in self.nos_cluster if no_id != self.node_id}
+            self.pendentes.clear()
+            for seq_id, (dados_op, (_, _, _, num_reqs, total_sum)) in historico.items():
+                evento = threading.Event()
+                evento.set()
+                self.op_to_seq[dados_op[:2]] = seq_id
+                self.operacoes[seq_id] = {
+                    "dados_op": dados_op,
+                    "rms_que_votaram": set(),
+                    "votos_concordantes": {},
+                    "resultado_final": (num_reqs, total_sum),
+                    "evento_quorum": evento,
+                    "em_andamento": False,
+                }
+            self.rms_ativos = set(rms_ativos)
             agora = time.monotonic()
             self.ultimo_contato_rm = {no_id: agora for no_id in self.rms_ativos}
             self.aguardando_desde = {no_id: None for no_id in self.rms_ativos}
@@ -114,6 +132,7 @@ class FrontEnd:
                     "em_andamento": True,
                 }
                 self.operacoes[seq_id] = op_info
+                self.pendentes.add(seq_id)
                 conduzir_multicast = True
 
                 print(
@@ -172,24 +191,14 @@ class FrontEnd:
 
             self.ultimo_contato_rm[rm_id] = time.monotonic()
             self.aguardando_desde[rm_id] = None
-
-            if rm_id not in self.rms_ativos:
-                self.rms_ativos.add(rm_id)
-                ip_rm = self.nos_cluster.get(rm_id, (str(rm_id),))[0]
-                print(
-                    protocolo.colorir(
-                        f"[FE {self.ip_maq}] Ingresso/retorno do RM {ip_rm} | "
-                        f"Quórum atual: {self.formatar_quorum()}",
-                        protocolo.COLOR_FE,
-                    ),
-                    flush=True,
-                )
+            self._marcar_rm(rm_id, True)
 
             op_info = self.operacoes.get(seq_id)
             if op_info is None or op_info["evento_quorum"].is_set():
                 return
 
             if rm_id in op_info["rms_que_votaram"]:
+                self._verificar_quorum_op(seq_id, op_info)
                 return
             op_info["rms_que_votaram"].add(rm_id)
 
@@ -197,10 +206,18 @@ class FrontEnd:
             grupo_votos = op_info["votos_concordantes"].setdefault(chave_res, set())
             grupo_votos.add(rm_id)
 
-            quorum = self.calcular_quorum()
-            if quorum is not None and len(grupo_votos) >= quorum:
+            self._verificar_quorum_op(seq_id, op_info)
+
+    def _verificar_quorum_op(self, seq_id, op_info):
+        quorum = self.calcular_quorum()
+        if quorum is None:
+            return
+        for chave_res, grupo_votos in op_info["votos_concordantes"].items():
+            if len(grupo_votos & self.rms_ativos) >= quorum:
                 op_info["resultado_final"] = chave_res
                 op_info["evento_quorum"].set()
+                self.pendentes.discard(seq_id)
+                return
 
     def tratar_nack(self, dados, addr_remetente):
         """Reenvia operações faltantes a um RM que detectou lacuna de sequência."""
@@ -241,14 +258,33 @@ class FrontEnd:
                 and (agora - self.aguardando_desde[rm_id]) > timeout_rm
             ]
             for rm_id in falhos:
-                self.rms_ativos.remove(rm_id)
-                self.aguardando_desde[rm_id] = None
-                ip_rm = self.nos_cluster.get(rm_id, (str(rm_id),))[0]
-                print(
-                    protocolo.colorir(
-                        f"[FE {self.ip_maq}] Falha detectada no RM {ip_rm} | "
-                        f"Quórum atual: {self.formatar_quorum()}",
-                        protocolo.COLOR_FAIL,
-                    ),
-                    flush=True,
-                )
+                self._marcar_rm(rm_id, False)
+
+    def marcar_rm(self, rm_id, ativo):
+        with self.lock_fe:
+            self._marcar_rm(rm_id, ativo)
+
+    def _marcar_rm(self, rm_id, ativo):
+        if rm_id == self.node_id or (rm_id in self.rms_ativos) == ativo:
+            return
+        if ativo:
+            self.rms_ativos.add(rm_id)
+            self.ultimo_contato_rm[rm_id] = time.monotonic()
+            self.aguardando_desde.setdefault(rm_id, None)
+            evento, cor = "Ingresso/retorno do", protocolo.COLOR_FE
+        else:
+            self.rms_ativos.discard(rm_id)
+            self.aguardando_desde[rm_id] = None
+            for seq_id in list(self.pendentes):
+                op_info = self.operacoes.get(seq_id)
+                if op_info is not None and not op_info["evento_quorum"].is_set():
+                    self._verificar_quorum_op(seq_id, op_info)
+            evento, cor = "Falha detectada no", protocolo.COLOR_FAIL
+        ip_rm = self.nos_cluster.get(rm_id, (str(rm_id),))[0]
+        print(
+            protocolo.colorir(
+                f"[FE {self.ip_maq}] {evento} RM {ip_rm} | Quórum atual: {self.formatar_quorum()}",
+                cor,
+            ),
+            flush=True,
+        )
