@@ -21,6 +21,37 @@ class BufferReordenacao:
             self.seq_por_operacao.pop((c_id, r_id), None)
         self.pendencias.clear()
 
+    def sincronizar_estado(self, expected_seq, num_reqs, total_sum):
+        self.expected_seq = expected_seq
+        self.num_reqs = num_reqs
+        self.total_sum = total_sum
+
+        for s in list(self.pendencias.keys()):
+            if s < self.expected_seq:
+                c_id, r_id, _ = self.pendencias.pop(s)
+                self.seq_por_operacao.pop((c_id, r_id), None)
+
+        aplicadas = []
+        while self.expected_seq in self.pendencias:
+            curr_seq = self.expected_seq
+            curr_client_id, curr_id_req, curr_valor = self.pendencias.pop(curr_seq)
+            self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
+            self.total_sum = (self.total_sum + curr_valor) & 0xFFFFFFFFFFFFFFFF
+            resultado = (
+                curr_seq,
+                curr_client_id,
+                curr_id_req,
+                self.num_reqs,
+                self.total_sum,
+            )
+            curr_operacao = (curr_client_id, curr_id_req, curr_valor)
+            self.historico[curr_seq] = (curr_operacao, resultado)
+            self.seq_por_operacao[(curr_client_id, curr_id_req)] = curr_seq
+            aplicadas.append(resultado)
+            self.expected_seq += 1
+
+        return aplicadas
+
     def processar(self, seq_id, client_id, id_req, valor):
         if seq_id < 1:
             raise ValueError("seq_id deve ser maior ou igual a 1")

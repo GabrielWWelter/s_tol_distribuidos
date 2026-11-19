@@ -9,7 +9,7 @@ import protocolo
 
 # tempo de espera para o protocolo stop-and-wait
 TIMEOUT = 0.010 # 10 milisegundos
-TENTATIVAS_ANTES_REDESCOBERTA = 100 # valor arbitário, talvez mudar isso quando definir o heartbeat
+TENTATIVAS_ANTES_REDESCOBERTA = 12
 
 def get_timestamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

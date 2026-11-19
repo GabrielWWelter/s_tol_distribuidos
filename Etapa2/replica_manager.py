@@ -23,6 +23,28 @@ class ReplicaManager:
         with self.lock_rm:
             return self.buffer.expected_seq
 
+    def sincronizar(self, next_seq, num_reqs, total_sum, leader_id=None):
+        with self.lock_rm:
+            aplicadas = self.buffer.sincronizar_estado(next_seq, num_reqs, total_sum)
+        print(
+            protocolo.colorir(
+                f"[RM {self.ip_maq}] Sincronizado com cluster: seq={next_seq} | num_reqs={num_reqs} | total_sum={total_sum}",
+                protocolo.COLOR_RM,
+            ),
+            flush=True,
+        )
+        if aplicadas and leader_id:
+            fe_addr = self.nos_cluster.get(leader_id)
+            if fe_addr:
+                for s, c_id, r_id, n_reqs, t_sum in aplicadas:
+                    pacote_ack = protocolo.pack_rm_ack(
+                        s, c_id, r_id, n_reqs, t_sum, self.node_id
+                    )
+                    try:
+                        self.sock_cluster.sendto(pacote_ack, fe_addr)
+                    except OSError:
+                        pass
+
     def tratar_order_multicast(self, dados, addr_remetente, leader_id):
         try:
             seq_id, id_cliente, id_req, valor = protocolo.unpack_order_multicast(dados)
@@ -45,13 +67,32 @@ class ReplicaManager:
                 return
 
         if not resultados:
-            print(
-                protocolo.colorir(
-                    f"[RM {self.ip_maq}] seq={seq_id} retido (esperando seq={self.buffer.expected_seq})",
-                    protocolo.COLOR_RM,
-                ),
-                flush=True,
-            )
+            if seq_id < self.buffer.expected_seq:
+                fe_addr = self.nos_cluster.get(leader_id, addr_remetente)
+                pacote_ack = protocolo.pack_rm_ack(
+                    seq_id, id_cliente, id_req, self.buffer.num_reqs, self.buffer.total_sum, self.node_id
+                )
+                try:
+                    self.sock_cluster.sendto(pacote_ack, fe_addr)
+                except OSError:
+                    pass
+            elif seq_id > self.buffer.expected_seq:
+                print(
+                    protocolo.colorir(
+                        f"[RM {self.ip_maq}] seq={seq_id} retido (esperando seq={self.buffer.expected_seq})",
+                        protocolo.COLOR_RM,
+                    ),
+                    flush=True,
+                )
+                fe_addr = self.nos_cluster.get(leader_id, addr_remetente)
+                if fe_addr is not None:
+                    try:
+                        self.sock_cluster.sendto(
+                            protocolo.pack_nack(self.buffer.expected_seq, self.node_id),
+                            fe_addr,
+                        )
+                    except OSError:
+                        pass
             return
 
         fe_addr = self.nos_cluster.get(leader_id, addr_remetente)

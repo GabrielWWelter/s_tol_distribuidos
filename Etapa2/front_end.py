@@ -183,7 +183,7 @@ class FrontEnd:
                         return
                     tentativas += 1
                     self.multicast_rms(pacote_mc)
-                    if tentativas >= 50:
+                    if tentativas >= 200:
                         return
             finally:
                 with self.lock_fe:
@@ -241,8 +241,37 @@ class FrontEnd:
             if self.op_to_seq.get(old_key) == oldest_seq:
                 del self.op_to_seq[old_key]
 
+    def obter_estado_sincronizacao(self):
+        with self.lock_fe:
+            if self.pendentes:
+                sync_seq = min(self.pendentes)
+                if sync_seq == 1:
+                    sync_num_reqs = 0
+                    sync_total_sum = 0
+                else:
+                    prev_seq = sync_seq - 1
+                    prev_op = self.operacoes.get(prev_seq)
+                    if prev_op is not None and prev_op["resultado_final"] is not None:
+                        sync_num_reqs, sync_total_sum = prev_op["resultado_final"]
+                    else:
+                        sync_num_reqs, sync_total_sum = self.num_reqs, self.total_sum
+            else:
+                sync_seq = self.next_seq
+                sync_num_reqs = self.num_reqs
+                sync_total_sum = self.total_sum
+            return sync_seq, sync_num_reqs, sync_total_sum
+
+    def obter_pacotes_pendentes(self):
+        with self.lock_fe:
+            pacotes = []
+            for s in sorted(self.pendentes):
+                op_info = self.operacoes.get(s)
+                if op_info is not None and not op_info["evento_quorum"].is_set():
+                    c_id, r_id, val = op_info["dados_op"]
+                    pacotes.append(protocolo.pack_order_multicast(s, c_id, r_id, val))
+            return pacotes
+
     def _resolver_sem_rms(self, seq_id, op_info):
-        """Aplica localmente quando resta apenas o FE (0 RMs ativos)."""
         _, _, valor = op_info["dados_op"]
         self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
         self.total_sum = (self.total_sum + valor) & 0xFFFFFFFFFFFFFFFF
@@ -260,11 +289,25 @@ class FrontEnd:
                 op_info["resultado_final"] = chave_res
                 op_info["evento_quorum"].set()
                 self.pendentes.discard(seq_id)
+                votos_divergentes = op_info["rms_que_votaram"] - grupo_votos
                 op_info["rms_que_votaram"].clear()
                 op_info["votos_concordantes"].clear()
                 if chave_res[0] > self.num_reqs:
                     self.num_reqs, self.total_sum = chave_res
                 self._podar_historico()
+
+                for rm_id in votos_divergentes:
+                    addr_rm = self.nos_cluster.get(rm_id)
+                    if addr_rm is not None:
+                        try:
+                            self.sock_cluster.sendto(
+                                protocolo.pack_state_sync(
+                                    seq_id + 1, self.num_reqs, self.total_sum
+                                ),
+                                addr_rm,
+                            )
+                        except OSError:
+                            pass
                 return
 
     def tratar_nack(self, dados, addr_remetente):

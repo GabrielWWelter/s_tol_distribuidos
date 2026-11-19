@@ -10,12 +10,12 @@ from detector_falhas import DetectorFalhas
 from front_end import FrontEnd
 from replica_manager import ReplicaManager
 
-INTERVALO_HEARTBEAT = 0.1
-TIMEOUT_HEARTBEAT = 0.5
-TIMEOUT_ELECTION_ACK = 0.1
+INTERVALO_HEARTBEAT = 0.025
+TIMEOUT_HEARTBEAT = 0.075
+TIMEOUT_ELECTION_ACK = 0.025
 TENTATIVAS_ELEICAO = 3
-TIMEOUT_ELEICAO = 2.0
-TIMEOUT_DESCOBERTA = 0.8
+TIMEOUT_ELEICAO = 0.3
+TIMEOUT_DESCOBERTA = 0.2
 
 
 def obter_ip_interface():
@@ -324,6 +324,20 @@ class ServidorReplicado:
             self.nos_cluster[rm_id] = (rm_ip, rm_port)
         self.fe.adicionar_rm(rm_id, rm_ip, rm_port)
         self.detector.registrar(rm_id)
+
+        sync_seq, num_reqs, total_sum = self.fe.obter_estado_sincronizacao()
+        pct_sync = protocolo.pack_state_sync(sync_seq, num_reqs, total_sum)
+        try:
+            self.sock_cluster.sendto(pct_sync, (rm_ip, rm_port))
+        except OSError:
+            pass
+
+        for pct_op in self.fe.obter_pacotes_pendentes():
+            try:
+                self.sock_cluster.sendto(pct_op, (rm_ip, rm_port))
+            except OSError:
+                pass
+
         self.propagar_topologia()
 
     def descobrir_cluster_inicial(self):
@@ -424,12 +438,18 @@ class ServidorReplicado:
                 with self.rm.lock_rm:
                     buffer = self.rm.buffer
                     buffer.limpar_pendencias_nao_aplicadas()
+                    maior_seq = buffer.expected_seq
+                    for no_id in self.detector.ativos() - {self.node_id, self.leader_id}:
+                        seq_no = self.ultimo_seq_no.get(no_id, -1) + 1
+                        if seq_no > maior_seq:
+                            maior_seq = seq_no
+
                     rms_em_dia = {
                         no_id
                         for no_id in self.detector.ativos() - {self.node_id, self.leader_id}
-                        if self.ultimo_seq_no.get(no_id, -1) >= buffer.expected_seq - 1
+                        if self.ultimo_seq_no.get(no_id, -1) >= maior_seq - 1
                     }
-                    self.fe.ativar(buffer.expected_seq, buffer.historico, rms_em_dia)
+                    self.fe.ativar(maior_seq, buffer.historico, rms_em_dia)
                 self.leader_id = self.node_id
                 self.em_eleicao = False
                 self.inicio_eleicao = None
@@ -470,9 +490,18 @@ class ServidorReplicado:
                 self.nos_cluster[no_id] = (addr[0], self.port_cluster)
         self.detector.registrar(no_id)
         self.ultimo_seq_no[no_id] = ultimo_seq
-        if self.is_leader() and ultimo_seq >= self.fe.obter_proximo_seq() - 1:
-            if self.fe.marcar_rm(no_id, True):
-                self.propagar_topologia()
+        if self.is_leader():
+            proximo_seq = self.fe.obter_proximo_seq()
+            if ultimo_seq >= proximo_seq - 1:
+                if self.fe.marcar_rm(no_id, True):
+                    self.propagar_topologia()
+            elif no_id not in self.fe.rms_ativos:
+                sync_seq, num_reqs, total_sum = self.fe.obter_estado_sincronizacao()
+                pct_sync = protocolo.pack_state_sync(sync_seq, num_reqs, total_sum)
+                try:
+                    self.sock_cluster.sendto(pct_sync, (addr[0], self.port_cluster))
+                except OSError:
+                    pass
         if lider_remoto == no_id:
             self.definir_lider(no_id, via_coordenador=False)
 
@@ -488,6 +517,9 @@ class ServidorReplicado:
                 self.tratar_rm_join(dados, addr)
             elif tipo == protocolo.MSG_TOPOLOGY:
                 self.tratar_topologia(dados)
+            elif tipo == protocolo.MSG_STATE_SYNC and not self.is_leader():
+                next_seq, num_reqs, total_sum = protocolo.unpack_state_sync(dados)
+                self.rm.sincronizar(next_seq, num_reqs, total_sum, self.leader_id)
             elif tipo == protocolo.MSG_ELECTION:
                 threading.Thread(target=self.tratar_eleicao, args=(dados, addr), daemon=True).start()
             elif tipo == protocolo.MSG_ELECTION_ACK:
@@ -518,6 +550,9 @@ class ServidorReplicado:
                 tipo = dados[0]
                 if tipo == protocolo.MSG_ORDER_MULTICAST and not self.is_leader():
                     self.rm.tratar_order_multicast(dados, addr, self.leader_id)
+                elif tipo == protocolo.MSG_STATE_SYNC and not self.is_leader():
+                    next_seq, num_reqs, total_sum = protocolo.unpack_state_sync(dados)
+                    self.rm.sincronizar(next_seq, num_reqs, total_sum, self.leader_id)
                 elif tipo == protocolo.MSG_RM_ACK and self.is_leader():
                     self.fe.tratar_rm_ack(dados)
                 elif tipo == protocolo.MSG_NACK and self.is_leader():

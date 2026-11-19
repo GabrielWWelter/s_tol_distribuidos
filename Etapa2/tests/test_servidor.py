@@ -176,6 +176,97 @@ class TestServidorDinamico(unittest.TestCase):
         finally:
             novo_fe.fechar_sockets()
 
+    def test_obter_estado_sincronizacao_com_pendencias(self):
+        fe_id = ip_para_id("127.0.0.1")
+        sock_clu = SocketCapturador()
+        fe = FrontEnd(
+            "127.0.0.1",
+            fe_id,
+            {fe_id: ("127.0.0.1", 5201)},
+            fe_id,
+            SocketCapturador(),
+            sock_clu,
+        )
+        fe.operacoes[1] = {
+            "dados_op": (10, 1, 50),
+            "rms_que_votaram": set(),
+            "votos_concordantes": {},
+            "resultado_final": (1, 50),
+            "evento_quorum": threading.Event(),
+            "em_andamento": False,
+        }
+        fe.operacoes[1]["evento_quorum"].set()
+        fe.num_reqs = 1
+        fe.total_sum = 50
+
+        fe.operacoes[2] = {
+            "dados_op": (10, 2, 30),
+            "rms_que_votaram": set(),
+            "votos_concordantes": {},
+            "resultado_final": None,
+            "evento_quorum": threading.Event(),
+            "em_andamento": True,
+        }
+        fe.pendentes.add(2)
+        fe.next_seq = 3
+
+        sync_seq, num_reqs, total_sum = fe.obter_estado_sincronizacao()
+        self.assertEqual(sync_seq, 2)
+        self.assertEqual(num_reqs, 1)
+        self.assertEqual(total_sum, 50)
+
+        pacotes = fe.obter_pacotes_pendentes()
+        self.assertEqual(len(pacotes), 1)
+        seq_p, c_id, r_id, val = protocolo.unpack_order_multicast(pacotes[0])
+        self.assertEqual((seq_p, c_id, r_id, val), (2, 10, 2, 30))
+
+    def test_voto_divergente_recebe_state_sync(self):
+        fe_id = ip_para_id("127.0.0.1")
+        rm1_id = ip_para_id("127.0.0.2")
+        rm2_id = ip_para_id("127.0.0.3")
+        rm3_id = ip_para_id("127.0.0.4")
+        sock_clu = SocketCapturador()
+
+        fe = FrontEnd(
+            "127.0.0.1",
+            fe_id,
+            {
+                fe_id: ("127.0.0.1", 5201),
+                rm1_id: ("127.0.0.2", 5201),
+                rm2_id: ("127.0.0.3", 5201),
+                rm3_id: ("127.0.0.4", 5201),
+            },
+            fe_id,
+            SocketCapturador(),
+            sock_clu,
+        )
+        fe.operacoes[1] = {
+            "dados_op": (10, 1, 100),
+            "rms_que_votaram": set(),
+            "votos_concordantes": {},
+            "resultado_final": None,
+            "evento_quorum": threading.Event(),
+            "em_andamento": True,
+        }
+        fe.pendentes.add(1)
+        fe.next_seq = 2
+
+        fe.tratar_rm_ack(protocolo.pack_rm_ack(1, 10, 1, 1, 100, rm1_id))
+        fe.tratar_rm_ack(protocolo.pack_rm_ack(1, 10, 1, 0, 50, rm3_id))
+        fe.tratar_rm_ack(protocolo.pack_rm_ack(1, 10, 1, 1, 100, rm2_id))
+
+        self.assertTrue(fe.operacoes[1]["evento_quorum"].is_set())
+        sync_enviados = [
+            (p, dest)
+            for p, dest in sock_clu.enviados
+            if p[0] == protocolo.MSG_STATE_SYNC
+        ]
+        self.assertEqual(len(sync_enviados), 1)
+        pct, dest = sync_enviados[0]
+        self.assertEqual(dest, ("127.0.0.4", 5201))
+        n_seq, n_reqs, t_sum = protocolo.unpack_state_sync(pct)
+        self.assertEqual((n_seq, n_reqs, t_sum), (2, 1, 100))
+
 
 if __name__ == "__main__":
     unittest.main()

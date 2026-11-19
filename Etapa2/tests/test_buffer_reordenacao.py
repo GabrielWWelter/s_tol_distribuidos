@@ -127,6 +127,22 @@ class TestBufferReordenacao(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(res, [(11, 1002, 1, 11, 150)])
 
+    def test_sincronizar_estado_reinicia_contadores_e_descarrega_pendencias(self):
+        buf = BufferReordenacao()
+        # RM recebe pacote 50 antes de sincronizar (fica retido)
+        buf.processar(50, 1001, 1, 20)
+        self.assertIn(50, buf.pendencias)
+
+        # Sincroniza diretamente para seq=50, num_reqs=49, total_sum=1000
+        aplicadas = buf.sincronizar_estado(expected_seq=50, num_reqs=49, total_sum=1000)
+
+        # Como a seq 50 ja estava retida, deve ter sido descarregada imediatamente
+        self.assertEqual(len(aplicadas), 1)
+        self.assertEqual(aplicadas[0], (50, 1001, 1, 50, 1020))
+        self.assertEqual(buf.expected_seq, 51)
+        self.assertEqual(buf.num_reqs, 50)
+        self.assertEqual(buf.total_sum, 1020)
+
 
 if __name__ == "__main__":
     unittest.main()

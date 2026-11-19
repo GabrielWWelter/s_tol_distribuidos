@@ -55,6 +55,7 @@ MSG_TOPOLOGY = 15
 MSG_SERVER_DISCOVERY = 16
 MSG_SERVER_DISCOVERY_RESP = 17
 MSG_RM_JOIN = 18
+MSG_STATE_SYNC = 19
 MSG_ELECTION = 20
 MSG_COORDINATOR = 21
 MSG_ELECTION_ACK = 22
@@ -174,3 +175,11 @@ def unpack_topology(dados):
         ips.append(ip_str)
         offset += 4
     return leader_id, ips
+
+# 1 byte tipo, 8 bytes next_seq, 8 bytes num_reqs, 8 bytes total_sum
+def pack_state_sync(next_seq, num_reqs, total_sum):
+    return struct.pack("!BQQQ", MSG_STATE_SYNC, next_seq, num_reqs, total_sum)
+
+def unpack_state_sync(dados):
+    _, next_seq, num_reqs, total_sum = struct.unpack("!BQQQ", dados)
+    return next_seq, num_reqs, total_sum

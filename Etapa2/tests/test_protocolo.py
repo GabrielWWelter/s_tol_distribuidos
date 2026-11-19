@@ -121,6 +121,14 @@ class TestProtocoloEtapa2(unittest.TestCase):
         self.assertEqual(ret_lider, lider_id)
         self.assertEqual(ret_ips, ips)
 
+    def test_state_sync(self):
+        pct = protocolo.pack_state_sync(105, 104, 52000)
+        self.assertEqual(pct[0], protocolo.MSG_STATE_SYNC)
+        next_seq, num_reqs, total_sum = protocolo.unpack_state_sync(pct)
+        self.assertEqual(next_seq, 105)
+        self.assertEqual(num_reqs, 104)
+        self.assertEqual(total_sum, 52000)
+
 
 if __name__ == "__main__":
     unittest.main()
