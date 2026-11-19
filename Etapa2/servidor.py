@@ -14,6 +14,7 @@ INTERVALO_HEARTBEAT = 0.1
 TIMEOUT_HEARTBEAT = 0.5
 TIMEOUT_ELECTION_ACK = 0.1
 TENTATIVAS_ELEICAO = 3
+TIMEOUT_ELEICAO = 2.0
 TIMEOUT_DESCOBERTA = 0.8
 
 
@@ -61,6 +62,7 @@ class ServidorReplicado:
         self.nos_cluster[self.node_id] = (ip_maq, port_cluster)
         self.leader_id = None
         self.em_eleicao = False
+        self.inicio_eleicao = None
         self.detector = DetectorFalhas(TIMEOUT_HEARTBEAT)
         self.ultimo_seq_no = {}
         self.ack_eleicao = threading.Event()
@@ -68,6 +70,7 @@ class ServidorReplicado:
         self.esperando_ack_de = None
         self.lock_eleicao = threading.Lock()
         self.lock_lider = threading.Lock()
+        self.lock_nos = threading.Lock()
 
         # Canal Externo Unicast: ligado ao IP específico da máquina para responder
         # descobertas com o IP correto do FE e receber MSG_REQ diretamente
@@ -133,7 +136,8 @@ class ServidorReplicado:
 
     def _encaminhar_descoberta_ao_lider(self, addr):
         """Encaminha pedido de descoberta recebido por um RM para que o FE responda."""
-        fe_addr = self.nos_cluster.get(self.leader_id)
+        with self.lock_nos:
+            fe_addr = self.nos_cluster.get(self.leader_id)
         if fe_addr is None:
             return
         try:
@@ -207,18 +211,24 @@ class ServidorReplicado:
         print(protocolo.colorir(f"[{papel} {self.ip_maq}] {texto}", cor), flush=True)
 
     def ip(self, no_id):
-        return self.nos_cluster.get(no_id, (str(no_id),))[0]
+        with self.lock_nos:
+            return self.nos_cluster.get(no_id, (str(no_id),))[0]
 
     def enviar_a_todos(self, pacote):
-        for no_id, addr in list(self.nos_cluster.items()):
-            if no_id != self.node_id:
-                try:
-                    self.sock_cluster.sendto(pacote, addr)
-                except OSError:
-                    pass
+        with self.lock_nos:
+            alvos = [
+                addr for no_id, addr in self.nos_cluster.items() if no_id != self.node_id
+            ]
+        for addr in alvos:
+            try:
+                self.sock_cluster.sendto(pacote, addr)
+            except OSError:
+                pass
 
     def inativos(self):
-        inativos_set = set(self.nos_cluster) - self.detector.ativos() - {self.node_id}
+        with self.lock_nos:
+            todos = set(self.nos_cluster)
+        inativos_set = todos - self.detector.ativos() - {self.node_id}
         if self.em_eleicao and self.leader_id is not None and not self.is_leader():
             inativos_set.add(self.leader_id)
         return inativos_set
@@ -239,36 +249,54 @@ class ServidorReplicado:
                         self.propagar_topologia()
                 elif no_id == self.leader_id and not self.em_eleicao:
                     self.em_eleicao = True
+                    self.inicio_eleicao = time.monotonic()
                     self.log(f"Detecção de falha no front-end {self.ip(no_id)}", protocolo.COLOR_FAIL)
                     self.log("Início da execução do algoritmo de eleição", protocolo.COLOR_ELECTION)
                     threading.Thread(target=self.propagar_eleicao, args=(self.node_id,), daemon=True).start()
+            if (
+                self.em_eleicao
+                and not self.is_leader()
+                and self.inicio_eleicao is not None
+                and (time.monotonic() - self.inicio_eleicao) > TIMEOUT_ELEICAO
+            ):
+                self.inicio_eleicao = time.monotonic()
+                self.log("Timeout na eleição em andamento; reiniciando eleição no anel", protocolo.COLOR_FAIL)
+                threading.Thread(target=self.propagar_eleicao, args=(self.node_id,), daemon=True).start()
             time.sleep(INTERVALO_HEARTBEAT)
 
     def propagar_topologia(self):
         ips = sorted(self.fe.obter_ips_cluster(), key=ip_para_id)
         ativos_ids = {ip_para_id(ip_str) for ip_str in ips}
-        for no_id in list(self.nos_cluster):
-            if no_id not in ativos_ids and no_id != self.node_id:
-                self.nos_cluster.pop(no_id, None)
+        destinos = []
+        with self.lock_nos:
+            for no_id in list(self.nos_cluster):
+                if no_id not in ativos_ids and no_id != self.node_id:
+                    self.nos_cluster.pop(no_id, None)
+            for no_id in ativos_ids:
+                if no_id != self.node_id and no_id in self.nos_cluster:
+                    destinos.append(self.nos_cluster[no_id])
         pct = protocolo.pack_topology(self.node_id, ips)
-        for rm_id in list(self.fe.rms_ativos):
-            if rm_id in self.nos_cluster:
-                try:
-                    self.sock_cluster.sendto(pct, self.nos_cluster[rm_id])
-                except OSError:
-                    pass
+        for addr_rm in destinos:
+            try:
+                self.sock_cluster.sendto(pct, addr_rm)
+            except OSError:
+                pass
 
     def tratar_topologia(self, dados):
         leader_id, ips = protocolo.unpack_topology(dados)
         with self.lock_lider:
             self.leader_id = leader_id
             self.em_eleicao = False
+            self.inicio_eleicao = None
         novos_nos = {self.node_id: (self.ip_maq, self.port_cluster)}
         for ip_str in ips:
             nid = ip_para_id(ip_str)
             novos_nos[nid] = (ip_str, self.port_cluster)
-        self.nos_cluster.clear()
-        self.nos_cluster.update(novos_nos)
+        with self.lock_nos:
+            for no_id in list(self.nos_cluster):
+                if no_id not in novos_nos:
+                    del self.nos_cluster[no_id]
+            self.nos_cluster.update(novos_nos)
         self.log(f"Topologia do anel atualizada: {ips}", protocolo.COLOR_RM)
 
     def tratar_server_discovery(self, dados, addr):
@@ -281,8 +309,9 @@ class ServidorReplicado:
 
     def tratar_server_discovery_resp(self, dados, addr):
         lider_id = protocolo.unpack_server_discovery_resp(dados)
+        with self.lock_nos:
+            self.nos_cluster[lider_id] = (addr[0], self.port_cluster)
         self.leader_id = lider_id
-        self.nos_cluster[lider_id] = (addr[0], self.port_cluster)
         self.detector.registrar(lider_id)
         self.evento_descoberta.set()
 
@@ -291,7 +320,8 @@ class ServidorReplicado:
             return
         rm_id, rm_port = protocolo.unpack_rm_join(dados)
         rm_ip = addr[0]
-        self.nos_cluster[rm_id] = (rm_ip, rm_port)
+        with self.lock_nos:
+            self.nos_cluster[rm_id] = (rm_ip, rm_port)
         self.fe.adicionar_rm(rm_id, rm_ip, rm_port)
         self.detector.registrar(rm_id)
         self.propagar_topologia()
@@ -337,16 +367,25 @@ class ServidorReplicado:
 
     def propagar_eleicao(self, candidato):
         self.em_eleicao = True
+        if self.inicio_eleicao is None:
+            self.inicio_eleicao = time.monotonic()
         pacote = protocolo.pack_election(self.node_id, candidato)
         with self.lock_eleicao:
             inativos = self.inativos()
             try:
-                while (sucessor := eleicao_anel.sucessor(self.nos_cluster, self.node_id, inativos)) is not None:
+                while True:
+                    with self.lock_nos:
+                        nos_ids = list(self.nos_cluster)
+                        sucessor = eleicao_anel.sucessor(nos_ids, self.node_id, inativos)
+                        addr_sucessor = self.nos_cluster.get(sucessor) if sucessor is not None else None
+                    if sucessor is None:
+                        break
                     self.log(f"Enviando eleição a {self.ip(sucessor)} (candidato={self.ip(candidato)})")
                     self.esperando_ack_de = sucessor
                     for _ in range(TENTATIVAS_ELEICAO):
                         self.ack_eleicao.clear()
-                        self.sock_cluster.sendto(pacote, self.nos_cluster[sucessor])
+                        if addr_sucessor is not None:
+                            self.sock_cluster.sendto(pacote, addr_sucessor)
                         if self.ack_eleicao.wait(TIMEOUT_ELECTION_ACK):
                             return
                     self.log(f"Sucessor {self.ip(sucessor)} não confirmou; pulando no anel", protocolo.COLOR_FAIL)
@@ -360,11 +399,18 @@ class ServidorReplicado:
             remetente, candidato = protocolo.unpack_election(dados)
         except struct.error:
             return
-        if remetente not in self.nos_cluster or candidato not in self.nos_cluster:
+        with self.lock_nos:
+            conhecidos = remetente in self.nos_cluster and candidato in self.nos_cluster
+        if not conhecidos:
             return
-        self.em_eleicao = True
         self.detector.registrar(remetente)
         self.sock_cluster.sendto(protocolo.pack_election_ack(self.node_id), addr)
+        if self.is_leader():
+            self.sock_cluster.sendto(protocolo.pack_coordinator(self.node_id), addr)
+            return
+        self.em_eleicao = True
+        if self.inicio_eleicao is None:
+            self.inicio_eleicao = time.monotonic()
         self.log(f"Eleição recebida de {self.ip(remetente)} (candidato={self.ip(candidato)})")
         acao, candidato = eleicao_anel.tratar_eleicao(self.node_id, candidato, self.inativos())
         if acao == "eleito":
@@ -377,6 +423,7 @@ class ServidorReplicado:
             if not self.is_leader():
                 with self.rm.lock_rm:
                     buffer = self.rm.buffer
+                    buffer.limpar_pendencias_nao_aplicadas()
                     rms_em_dia = {
                         no_id
                         for no_id in self.detector.ativos() - {self.node_id, self.leader_id}
@@ -385,6 +432,7 @@ class ServidorReplicado:
                     self.fe.ativar(buffer.expected_seq, buffer.historico, rms_em_dia)
                 self.leader_id = self.node_id
                 self.em_eleicao = False
+                self.inicio_eleicao = None
                 self.log(
                     f"Proclamação do novo coordenador: {self.ip_maq} | "
                     f"Assumindo Front-End a partir do seq_id={self.fe.next_seq} | "
@@ -395,7 +443,9 @@ class ServidorReplicado:
         self.propagar_topologia()
 
     def definir_lider(self, lider_id, via_coordenador=False):
-        if lider_id not in self.nos_cluster:
+        with self.lock_nos:
+            conhecido = lider_id in self.nos_cluster
+        if not conhecido:
             return
         with self.lock_lider:
             seq_remoto = self.ultimo_seq_no.get(lider_id, -1)
@@ -409,13 +459,15 @@ class ServidorReplicado:
             if lider_id != self.leader_id:
                 self.leader_id = lider_id
                 self.em_eleicao = False
+                self.inicio_eleicao = None
                 self.log(f"Novo líder: FE={self.ip(lider_id)}", protocolo.COLOR_LEADER)
 
     def tratar_heartbeat(self, dados, addr):
         lider_remoto, ultimo_seq = protocolo.unpack_heartbeat(dados)
         no_id = ip_para_id(addr[0])
-        if no_id not in self.nos_cluster:
-            self.nos_cluster[no_id] = (addr[0], self.port_cluster)
+        with self.lock_nos:
+            if no_id not in self.nos_cluster:
+                self.nos_cluster[no_id] = (addr[0], self.port_cluster)
         self.detector.registrar(no_id)
         self.ultimo_seq_no[no_id] = ultimo_seq
         if self.is_leader() and ultimo_seq >= self.fe.obter_proximo_seq() - 1:

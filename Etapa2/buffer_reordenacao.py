@@ -7,13 +7,19 @@ class OperacaoJaSequenciadaError(ValueError):
 
 
 class BufferReordenacao:
-    def __init__(self):
+    def __init__(self, max_historico=10000):
+        self.max_historico = max_historico
         self.expected_seq = 1
         self.num_reqs = 0
         self.total_sum = 0
         self.pendencias = {}
         self.historico = {}
         self.seq_por_operacao = {}
+
+    def limpar_pendencias_nao_aplicadas(self):
+        for _, (c_id, r_id, _) in self.pendencias.items():
+            self.seq_por_operacao.pop((c_id, r_id), None)
+        self.pendencias.clear()
 
     def processar(self, seq_id, client_id, id_req, valor):
         if seq_id < 1:
@@ -31,7 +37,10 @@ class BufferReordenacao:
 
         # Requisição duplicada: devolve o resultado original sem somar novamente.
         if seq_id < self.expected_seq:
-            operacao_original, resultado_original = self.historico[seq_id]
+            registro = self.historico.get(seq_id)
+            if registro is None:
+                return False, []
+            operacao_original, resultado_original = registro
             if operacao != operacao_original:
                 raise ConflitoSequenciaError(
                     f"seq_id {seq_id} recebido com conteúdo diferente"
@@ -71,6 +80,12 @@ class BufferReordenacao:
             curr_operacao = (curr_client_id, curr_id_req, curr_valor)
             self.historico[curr_seq] = (curr_operacao, resultado)
             self.seq_por_operacao[(curr_client_id, curr_id_req)] = curr_seq
+            if self.max_historico is not None and len(self.historico) > self.max_historico:
+                oldest_seq = next(iter(self.historico))
+                old_op, _ = self.historico.pop(oldest_seq)
+                old_key = (old_op[0], old_op[1])
+                if self.seq_por_operacao.get(old_key) == oldest_seq:
+                    del self.seq_por_operacao[old_key]
             aplicadas.append(resultado)
             self.expected_seq += 1
 

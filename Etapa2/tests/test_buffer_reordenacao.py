@@ -109,6 +109,24 @@ class TestBufferReordenacao(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.buf.processar(0, 1001, 1, 10)
 
+    def test_poda_historico_e_limpeza_pendencias_nao_aplicadas(self):
+        buf = BufferReordenacao(max_historico=5)
+        for s in range(1, 11):
+            buf.processar(s, 1001, s, 10)
+
+        self.assertLessEqual(len(buf.historico), 5)
+        ok_old, res_old = buf.processar(1, 1001, 1, 10)
+        self.assertFalse(ok_old)
+        self.assertEqual(res_old, [])
+
+        # Pendência órfã não impede re-sequenciamento após promoção de líder
+        buf.processar(12, 1002, 1, 50)
+        buf.limpar_pendencias_nao_aplicadas()
+        self.assertEqual(buf.pendencias, {})
+        ok, res = buf.processar(11, 1002, 1, 50)
+        self.assertTrue(ok)
+        self.assertEqual(res, [(11, 1002, 1, 11, 150)])
+
 
 if __name__ == "__main__":
     unittest.main()

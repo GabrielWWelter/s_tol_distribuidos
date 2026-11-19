@@ -1,12 +1,25 @@
 import os
 import sys
+import threading
 import unittest
 from unittest import mock
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import servidor
 import protocolo
+from front_end import FrontEnd
 from eleicao_anel import ip_para_id
+
+
+class SocketCapturador:
+    def __init__(self):
+        self.enviados = []
+
+    def sendto(self, pacote, destino):
+        self.enviados.append((pacote, destino))
+
+    def close(self):
+        pass
 
 
 class TestServidorDinamico(unittest.TestCase):
@@ -90,6 +103,78 @@ class TestServidorDinamico(unittest.TestCase):
             self.assertEqual(rm_srv.leader_id, novo_fe_id)
         finally:
             rm_srv.fechar_sockets()
+
+    def test_fe_poda_historico(self):
+        sock_clu = SocketCapturador()
+        fe_id = ip_para_id("127.0.0.1")
+        rm_id = ip_para_id("127.0.0.2")
+        fe_addr = ("127.0.0.1", 5201)
+
+        fe = FrontEnd(
+            "127.0.0.1",
+            fe_id,
+            {fe_id: fe_addr, rm_id: ("127.0.0.2", 5201)},
+            fe_id,
+            SocketCapturador(),
+            sock_clu,
+            max_historico=5,
+        )
+        for i in range(1, 10):
+            fe.operacoes[i] = {
+                "dados_op": (500, i, 10),
+                "rms_que_votaram": set(),
+                "votos_concordantes": {},
+                "resultado_final": None,
+                "evento_quorum": threading.Event(),
+                "em_andamento": False,
+            }
+            fe.op_to_seq[(500, i)] = i
+            fe.pendentes.add(i)
+            fe.next_seq = i + 1
+            fe.tratar_rm_ack(protocolo.pack_rm_ack(i, 500, i, i, i * 10, rm_id))
+
+        self.assertLessEqual(len(fe.operacoes), 5)
+
+    def test_promocao_fe_limpa_pendencia_e_fe_vivo_responde_coordinator(self):
+        novo_fe = servidor.ServidorReplicado("127.0.0.3", 4107, 5107)
+        try:
+            antigo_fe_id = ip_para_id("127.0.0.1")
+            rm2_id = ip_para_id("127.0.0.2")
+            novo_fe.nos_cluster[antigo_fe_id] = ("127.0.0.1", 5107)
+            novo_fe.nos_cluster[rm2_id] = ("127.0.0.2", 5107)
+            novo_fe.leader_id = antigo_fe_id
+            novo_fe.detector.registrar(rm2_id)
+            novo_fe.ultimo_seq_no[rm2_id] = 1
+            novo_fe.rm.buffer.processar(1, 1001, 1, 10)
+            novo_fe.rm.buffer.processar(3, 1002, 1, 99)
+
+            novo_fe.assumir_lideranca()
+            self.assertTrue(novo_fe.is_leader())
+            self.assertEqual(novo_fe.rm.buffer.pendencias, {})
+
+            sock_fe = SocketCapturador()
+            novo_fe.sock_cluster.close()
+            novo_fe.sock_cluster = sock_fe
+            novo_fe.tratar_eleicao(
+                protocolo.pack_election(rm2_id, rm2_id), ("127.0.0.2", 5107)
+            )
+            self.assertFalse(novo_fe.em_eleicao)
+            coords = [p for p, _ in sock_fe.enviados if p[0] == protocolo.MSG_COORDINATOR]
+            self.assertEqual(len(coords), 1)
+            self.assertEqual(protocolo.unpack_coordinator(coords[0]), novo_fe.node_id)
+
+            sock_cli = SocketCapturador()
+            novo_fe.fe.sock_cliente = sock_cli
+            novo_fe.fe.rms_ativos.clear()
+            novo_fe.fe.processar_requisicao_cliente(
+                protocolo.pack_req(2002, 1, 40), ("127.0.0.10", 6001), lambda: True
+            )
+            self.assertEqual(len(sock_cli.enviados), 1)
+            self.assertEqual(
+                protocolo.unpack_ack(sock_cli.enviados[0][0]), (2002, 1, 2, 50)
+            )
+        finally:
+            novo_fe.fechar_sockets()
 
 
 if __name__ == "__main__":

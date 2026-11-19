@@ -89,6 +89,18 @@ class TestClienteEtapa2(unittest.TestCase):
         self.assertEqual(sock.timeout, cliente.TIMEOUT)
         interface.assert_called_once_with(fe_novo[0], id_req, valor, 4, 125)
 
+    def test_oserror_nao_timeout_aguarda_intervalo_antes_de_reenviar(self):
+        ack = protocolo.pack_ack(1001, 1, 1, 10)
+        sock = SocketFalso([ConnectionResetError("port unreachable"), ack])
+
+        with mock.patch("cliente.time.sleep") as sleep_mock, \
+                mock.patch("cliente.interface_resposta_recebida"):
+            cliente.subservico_processamento(
+                sock, ("127.0.0.1", 4000), 1001, 1, 10, "127.0.0.1"
+            )
+
+        sleep_mock.assert_called_once_with(cliente.TIMEOUT)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@ import socket
 import threading
 import queue
 import secrets
+import time
 from datetime import datetime
 import protocolo
 
@@ -102,8 +103,12 @@ def subservico_processamento(sock, server_addr, client_id, id_req, valor, server
                     # se o id_req do ack for menor ao enviado, descarta e continua esperando por até 10 ms
                     elif ack_id < id_req:
                         continue
-        except (socket.timeout, TimeoutError, OSError):
-            # se o timeout de 10 ms expirar ou houver erro temporario de rede, reenvia o pacote
+        except (socket.timeout, TimeoutError):
+            # se o timeout de 10 ms expirar, reenvia o pacote
+            continue
+        except OSError:
+            # evita rajada imediata em erro de socket (ex.: ICMP port unreachable)
+            time.sleep(TIMEOUT)
             continue
 
 def main():

@@ -4,15 +4,27 @@ import protocolo
 
 
 class FrontEnd:
-    def __init__(self, ip_maq, node_id, nos_cluster, leader_id, sock_cliente, sock_cluster):
+    def __init__(
+        self,
+        ip_maq,
+        node_id,
+        nos_cluster,
+        leader_id,
+        sock_cliente,
+        sock_cluster,
+        max_historico=10000,
+    ):
         self.ip_maq = ip_maq
         self.node_id = node_id
         self.nos_cluster = nos_cluster
         self.sock_cliente = sock_cliente
         self.sock_cluster = sock_cluster
+        self.max_historico = max_historico
 
         self.lock_fe = threading.Lock()
         self.next_seq = 1
+        self.num_reqs = 0
+        self.total_sum = 0
         self.op_to_seq = {}  # (id_cliente, id_req) -> seq_id
         self.operacoes = {}  # seq_id -> registro de controle e quórum
         self.pendentes = set()  # seq_id ainda sem quórum atingido
@@ -45,6 +57,7 @@ class FrontEnd:
             self.op_to_seq.clear()
             self.operacoes.clear()
             self.pendentes.clear()
+            max_nr, max_ts = 0, 0
             for seq_id, (dados_op, (_, _, _, num_reqs, total_sum)) in historico.items():
                 evento = threading.Event()
                 evento.set()
@@ -57,6 +70,10 @@ class FrontEnd:
                     "evento_quorum": evento,
                     "em_andamento": False,
                 }
+                if num_reqs > max_nr:
+                    max_nr, max_ts = num_reqs, total_sum
+            self.num_reqs = max_nr
+            self.total_sum = max_ts
             self.rms_ativos = set(rms_ativos)
             agora = time.monotonic()
             self.ultimo_contato_rm = {no_id: agora for no_id in self.rms_ativos}
@@ -82,8 +99,9 @@ class FrontEnd:
         with self.lock_fe:
             destinos = []
             for rm_id in self.rms_ativos:
-                if rm_id in self.nos_cluster:
-                    destinos.append(self.nos_cluster[rm_id])
+                addr_rm = self.nos_cluster.get(rm_id)
+                if addr_rm is not None:
+                    destinos.append(addr_rm)
                     if self.aguardando_desde.get(rm_id) is None:
                         self.aguardando_desde[rm_id] = agora
 
@@ -110,6 +128,7 @@ class FrontEnd:
 
         chave_op = (id_cliente, id_req)
         conduzir_multicast = False
+        log_recebida = None
 
         with self.lock_fe:
             if chave_op in self.op_to_seq:
@@ -134,16 +153,17 @@ class FrontEnd:
                 self.operacoes[seq_id] = op_info
                 self.pendentes.add(seq_id)
                 conduzir_multicast = True
-
-                print(
-                    protocolo.colorir(
-                        f"[FE {self.ip_maq}] Requisição recebida (client={id_cliente}, "
-                        f"req={id_req}, val={valor}) -> seq_id={seq_id} | "
-                        f"Quórum atual: {self.formatar_quorum()}",
-                        protocolo.COLOR_FE,
-                    ),
-                    flush=True,
+                log_recebida = (
+                    f"[FE {self.ip_maq}] Requisição recebida (client={id_cliente}, "
+                    f"req={id_req}, val={valor}) -> seq_id={seq_id} | "
+                    f"Quórum atual: {self.formatar_quorum()}"
                 )
+            if not self.rms_ativos and not op_info["evento_quorum"].is_set():
+                self._resolver_sem_rms(seq_id, op_info)
+                conduzir_multicast = False
+
+        if log_recebida is not None:
+            print(protocolo.colorir(log_recebida, protocolo.COLOR_FE), flush=True)
 
         if op_info["evento_quorum"].is_set() and op_info["resultado_final"] is not None:
             num_reqs, total_sum = op_info["resultado_final"]
@@ -208,6 +228,29 @@ class FrontEnd:
 
             self._verificar_quorum_op(seq_id, op_info)
 
+    def _podar_historico(self):
+        if self.max_historico is None:
+            return
+        while len(self.operacoes) > self.max_historico:
+            oldest_seq = next(iter(self.operacoes))
+            old_info = self.operacoes[oldest_seq]
+            if old_info["resultado_final"] is None:
+                break
+            self.operacoes.pop(oldest_seq)
+            old_key = old_info["dados_op"][:2]
+            if self.op_to_seq.get(old_key) == oldest_seq:
+                del self.op_to_seq[old_key]
+
+    def _resolver_sem_rms(self, seq_id, op_info):
+        """Aplica localmente quando resta apenas o FE (0 RMs ativos)."""
+        _, _, valor = op_info["dados_op"]
+        self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
+        self.total_sum = (self.total_sum + valor) & 0xFFFFFFFFFFFFFFFF
+        op_info["resultado_final"] = (self.num_reqs, self.total_sum)
+        op_info["evento_quorum"].set()
+        self.pendentes.discard(seq_id)
+        self._podar_historico()
+
     def _verificar_quorum_op(self, seq_id, op_info):
         quorum = self.calcular_quorum()
         if quorum is None:
@@ -217,6 +260,11 @@ class FrontEnd:
                 op_info["resultado_final"] = chave_res
                 op_info["evento_quorum"].set()
                 self.pendentes.discard(seq_id)
+                op_info["rms_que_votaram"].clear()
+                op_info["votos_concordantes"].clear()
+                if chave_res[0] > self.num_reqs:
+                    self.num_reqs, self.total_sum = chave_res
+                self._podar_historico()
                 return
 
     def tratar_nack(self, dados, addr_remetente):
@@ -272,8 +320,9 @@ class FrontEnd:
         with self.lock_fe:
             ips = [self.ip_maq]
             for rm_id in sorted(self.rms_ativos):
-                if rm_id in self.nos_cluster:
-                    ips.append(self.nos_cluster[rm_id][0])
+                addr = self.nos_cluster.get(rm_id)
+                if addr is not None:
+                    ips.append(addr[0])
             return ips
 
     def marcar_rm(self, rm_id, ativo):
@@ -291,10 +340,13 @@ class FrontEnd:
         else:
             self.rms_ativos.discard(rm_id)
             self.aguardando_desde[rm_id] = None
-            for seq_id in list(self.pendentes):
+            for seq_id in sorted(self.pendentes):
                 op_info = self.operacoes.get(seq_id)
                 if op_info is not None and not op_info["evento_quorum"].is_set():
-                    self._verificar_quorum_op(seq_id, op_info)
+                    if self.rms_ativos:
+                        self._verificar_quorum_op(seq_id, op_info)
+                    else:
+                        self._resolver_sem_rms(seq_id, op_info)
             evento, cor = "Falha detectada no", protocolo.COLOR_FAIL
         ip_rm = self.nos_cluster.get(rm_id, (str(rm_id),))[0]
         print(
