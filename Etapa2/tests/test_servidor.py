@@ -267,6 +267,28 @@ class TestServidorDinamico(unittest.TestCase):
         n_seq, n_reqs, t_sum = protocolo.unpack_state_sync(pct)
         self.assertEqual((n_seq, n_reqs, t_sum), (2, 1, 100))
 
+    def test_rm_trata_duplicata_resequenciada_apos_failover(self):
+        fe_id = ip_para_id("127.0.0.1")
+        rm_id = ip_para_id("127.0.0.2")
+        sock_clu = SocketCapturador()
+        from replica_manager import ReplicaManager
+        rm = ReplicaManager("127.0.0.2", rm_id, {fe_id: ("127.0.0.1", 5201)}, sock_clu)
+
+        # RM processa seq=1 do líder original
+        rm.tratar_order_multicast(protocolo.pack_order_multicast(1, 1001, 1, 15), ("127.0.0.1", 5201), fe_id)
+        self.assertEqual(rm.buffer.expected_seq, 2)
+        self.assertEqual(rm.buffer.total_sum, 15)
+
+        # Apos failover, novo líder reenvia a mesma operacao sob seq=2
+        rm.tratar_order_multicast(protocolo.pack_order_multicast(2, 1001, 1, 15), ("127.0.0.1", 5201), fe_id)
+
+        # RM avanca para seq=3 sem duplicar total_sum e envia RM_ACK para o novo FE
+        self.assertEqual(rm.buffer.expected_seq, 3)
+        self.assertEqual(rm.buffer.total_sum, 15)
+        self.assertEqual(rm.buffer.num_reqs, 1)
+        acks = [p for p, _ in sock_clu.enviados if p[0] == protocolo.MSG_RM_ACK]
+        self.assertEqual(len(acks), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

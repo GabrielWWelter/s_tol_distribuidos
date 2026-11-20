@@ -21,22 +21,22 @@ class BufferReordenacao:
             self.seq_por_operacao.pop((c_id, r_id), None)
         self.pendencias.clear()
 
-    def sincronizar_estado(self, expected_seq, num_reqs, total_sum):
-        self.expected_seq = expected_seq
-        self.num_reqs = num_reqs
-        self.total_sum = total_sum
+    def _podar_historico(self):
+        if self.max_historico is not None and len(self.historico) > self.max_historico:
+            oldest_seq = next(iter(self.historico))
+            old_op, _ = self.historico.pop(oldest_seq)
+            old_key = (old_op[0], old_op[1])
+            if self.seq_por_operacao.get(old_key) == oldest_seq:
+                del self.seq_por_operacao[old_key]
 
-        for s in list(self.pendencias.keys()):
-            if s < self.expected_seq:
-                c_id, r_id, _ = self.pendencias.pop(s)
-                self.seq_por_operacao.pop((c_id, r_id), None)
-
+    def _descarregar_pendencias(self):
         aplicadas = []
         while self.expected_seq in self.pendencias:
             curr_seq = self.expected_seq
             curr_client_id, curr_id_req, curr_valor = self.pendencias.pop(curr_seq)
-            self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
-            self.total_sum = (self.total_sum + curr_valor) & 0xFFFFFFFFFFFFFFFF
+            if curr_valor > 0:
+                self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
+                self.total_sum = (self.total_sum + curr_valor) & 0xFFFFFFFFFFFFFFFF
             resultado = (
                 curr_seq,
                 curr_client_id,
@@ -47,10 +47,37 @@ class BufferReordenacao:
             curr_operacao = (curr_client_id, curr_id_req, curr_valor)
             self.historico[curr_seq] = (curr_operacao, resultado)
             self.seq_por_operacao[(curr_client_id, curr_id_req)] = curr_seq
+            self._podar_historico()
             aplicadas.append(resultado)
             self.expected_seq += 1
-
         return aplicadas
+
+    def resolver_duplicata_resequenciada(self, seq_id, client_id, id_req):
+        chave_operacao = (client_id, id_req)
+        if seq_id == self.expected_seq:
+            resultado = (seq_id, client_id, id_req, self.num_reqs, self.total_sum)
+            self.historico[seq_id] = ((client_id, id_req, 0), resultado)
+            self.seq_por_operacao[chave_operacao] = seq_id
+            self._podar_historico()
+            self.expected_seq += 1
+            return [resultado] + self._descarregar_pendencias()
+        elif seq_id > self.expected_seq:
+            self.pendencias[seq_id] = (client_id, id_req, 0)
+            return []
+        else:
+            return [(seq_id, client_id, id_req, self.num_reqs, self.total_sum)]
+
+    def sincronizar_estado(self, expected_seq, num_reqs, total_sum):
+        self.expected_seq = expected_seq
+        self.num_reqs = num_reqs
+        self.total_sum = total_sum
+
+        for s in list(self.pendencias.keys()):
+            if s < self.expected_seq:
+                c_id, r_id, _ = self.pendencias.pop(s)
+                self.seq_por_operacao.pop((c_id, r_id), None)
+
+        return self._descarregar_pendencias()
 
     def processar(self, seq_id, client_id, id_req, valor):
         if seq_id < 1:
@@ -92,38 +119,19 @@ class BufferReordenacao:
             return False, []
 
         # Requisição esperada: aplica soma e desencadeia pendências consecutivas.
-        aplicadas = []
-        curr_seq = seq_id
-        curr_client_id = client_id
-        curr_id_req = id_req
-        curr_valor = valor
+        self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
+        self.total_sum = (self.total_sum + valor) & 0xFFFFFFFFFFFFFFFF
+        resultado = (
+            seq_id,
+            client_id,
+            id_req,
+            self.num_reqs,
+            self.total_sum,
+        )
+        self.historico[seq_id] = (operacao, resultado)
+        self.seq_por_operacao[chave_operacao] = seq_id
+        self._podar_historico()
+        self.expected_seq += 1
 
-        while True:
-            self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
-            self.total_sum = (self.total_sum + curr_valor) & 0xFFFFFFFFFFFFFFFF
-            resultado = (
-                curr_seq,
-                curr_client_id,
-                curr_id_req,
-                self.num_reqs,
-                self.total_sum,
-            )
-            curr_operacao = (curr_client_id, curr_id_req, curr_valor)
-            self.historico[curr_seq] = (curr_operacao, resultado)
-            self.seq_por_operacao[(curr_client_id, curr_id_req)] = curr_seq
-            if self.max_historico is not None and len(self.historico) > self.max_historico:
-                oldest_seq = next(iter(self.historico))
-                old_op, _ = self.historico.pop(oldest_seq)
-                old_key = (old_op[0], old_op[1])
-                if self.seq_por_operacao.get(old_key) == oldest_seq:
-                    del self.seq_por_operacao[old_key]
-            aplicadas.append(resultado)
-            self.expected_seq += 1
-
-            if self.expected_seq in self.pendencias:
-                curr_seq = self.expected_seq
-                curr_client_id, curr_id_req, curr_valor = self.pendencias.pop(curr_seq)
-            else:
-                break
-
+        aplicadas = [resultado] + self._descarregar_pendencias()
         return True, aplicadas

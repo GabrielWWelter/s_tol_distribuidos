@@ -449,7 +449,13 @@ class ServidorReplicado:
                         for no_id in self.detector.ativos() - {self.node_id, self.leader_id}
                         if self.ultimo_seq_no.get(no_id, -1) >= maior_seq - 1
                     }
-                    self.fe.ativar(maior_seq, buffer.historico, rms_em_dia)
+                    self.fe.ativar(
+                        maior_seq,
+                        buffer.historico,
+                        rms_em_dia,
+                        buffer.num_reqs,
+                        buffer.total_sum,
+                    )
                 self.leader_id = self.node_id
                 self.em_eleicao = False
                 self.inicio_eleicao = None
@@ -526,7 +532,16 @@ class ServidorReplicado:
                 if protocolo.unpack_election_ack(dados) == self.esperando_ack_de:
                     self.ack_eleicao.set()
             elif tipo == protocolo.MSG_COORDINATOR:
-                self.definir_lider(protocolo.unpack_coordinator(dados), via_coordenador=True)
+                lider_id = protocolo.unpack_coordinator(dados)
+                self.definir_lider(lider_id, via_coordenador=True)
+                if lider_id != self.node_id:
+                    pct_hb = protocolo.pack_heartbeat(
+                        lider_id, self.rm.obter_proximo_seq() - 1
+                    )
+                    try:
+                        self.sock_cluster.sendto(pct_hb, addr)
+                    except OSError:
+                        pass
         except (struct.error, KeyError, OSError):
             pass
 
@@ -593,4 +608,10 @@ if __name__ == "__main__":
     servidor = ServidorReplicado(
         ip_maq, port_cliente, port_cluster, sock_reserva=sock_reserva
     )
-    servidor.iniciar()
+    try:
+        servidor.iniciar()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        servidor.fechar_sockets()
+        os._exit(0)

@@ -50,14 +50,14 @@ class FrontEnd:
         with self.lock_fe:
             return self.next_seq
 
-    def ativar(self, seq_inicial, historico, rms_ativos):
+    def ativar(self, seq_inicial, historico, rms_ativos, num_reqs_base=0, total_sum_base=0):
         """Prepara o FE quando este nó vence uma eleição de líder."""
         with self.lock_fe:
             self.next_seq = seq_inicial
             self.op_to_seq.clear()
             self.operacoes.clear()
             self.pendentes.clear()
-            max_nr, max_ts = 0, 0
+            max_nr, max_ts = num_reqs_base, total_sum_base
             for seq_id, (dados_op, (_, _, _, num_reqs, total_sum)) in historico.items():
                 evento = threading.Event()
                 evento.set()
@@ -112,90 +112,99 @@ class FrontEnd:
                 pass
 
     def processar_requisicao_cliente(self, dados, addr, check_lider):
-        tipo = dados[0]
-
-        if tipo == protocolo.MSG_DISCOVERY:
-            self.responder_descoberta(addr)
-            return
-
-        if tipo != protocolo.MSG_REQ:
-            return
-
         try:
-            id_cliente, id_req, valor = protocolo.unpack_req(dados)
+            tipo = dados[0]
+
+            if tipo == protocolo.MSG_DISCOVERY:
+                self.responder_descoberta(addr)
+                return
+
+            if tipo != protocolo.MSG_REQ:
+                return
+
+            try:
+                id_cliente, id_req, valor = protocolo.unpack_req(dados)
+            except Exception:
+                return
+
+            chave_op = (id_cliente, id_req)
+            conduzir_multicast = False
+            log_recebida = None
+
+            with self.lock_fe:
+                if chave_op in self.op_to_seq:
+                    seq_id = self.op_to_seq[chave_op]
+                    op_info = self.operacoes[seq_id]
+                    if not op_info["evento_quorum"].is_set() and not op_info["em_andamento"]:
+                        op_info["em_andamento"] = True
+                        conduzir_multicast = True
+                else:
+                    seq_id = self.next_seq
+                    self.next_seq += 1
+                    self.op_to_seq[chave_op] = seq_id
+
+                    op_info = {
+                        "dados_op": (id_cliente, id_req, valor),
+                        "rms_que_votaram": set(),
+                        "votos_concordantes": {},
+                        "resultado_final": None,
+                        "evento_quorum": threading.Event(),
+                        "em_andamento": True,
+                    }
+                    self.operacoes[seq_id] = op_info
+                    self.pendentes.add(seq_id)
+                    conduzir_multicast = True
+                    log_recebida = (
+                        f"[FE {self.ip_maq}] Requisição recebida (client={id_cliente}, "
+                        f"req={id_req}, val={valor}) -> seq_id={seq_id} | "
+                        f"Quórum atual: {self.formatar_quorum()}"
+                    )
+                if not self.rms_ativos and not op_info["evento_quorum"].is_set():
+                    self._resolver_sem_rms(seq_id, op_info)
+                    conduzir_multicast = False
+
+            if log_recebida is not None:
+                print(protocolo.colorir(log_recebida, protocolo.COLOR_FE), flush=True)
+
+            if op_info["evento_quorum"].is_set() and op_info["resultado_final"] is not None:
+                num_reqs, total_sum = op_info["resultado_final"]
+                try:
+                    self.sock_cliente.sendto(
+                        protocolo.pack_ack(id_cliente, id_req, num_reqs, total_sum), addr
+                    )
+                except OSError:
+                    pass
+                return
+
+            if conduzir_multicast:
+                pacote_mc = protocolo.pack_order_multicast(seq_id, id_cliente, id_req, valor)
+                self.multicast_rms(pacote_mc)
+
+                tentativas = 0
+                try:
+                    while not op_info["evento_quorum"].wait(timeout=0.005):
+                        if not check_lider():
+                            return
+                        tentativas += 1
+                        self.multicast_rms(pacote_mc)
+                        if tentativas >= 200:
+                            return
+                finally:
+                    with self.lock_fe:
+                        op_info["em_andamento"] = False
+            else:
+                op_info["evento_quorum"].wait(timeout=0.25)
+
+            if op_info["evento_quorum"].is_set() and op_info["resultado_final"] is not None:
+                num_reqs, total_sum = op_info["resultado_final"]
+                try:
+                    self.sock_cliente.sendto(
+                        protocolo.pack_ack(id_cliente, id_req, num_reqs, total_sum), addr
+                    )
+                except OSError:
+                    pass
         except Exception:
             return
-
-        chave_op = (id_cliente, id_req)
-        conduzir_multicast = False
-        log_recebida = None
-
-        with self.lock_fe:
-            if chave_op in self.op_to_seq:
-                seq_id = self.op_to_seq[chave_op]
-                op_info = self.operacoes[seq_id]
-                if not op_info["evento_quorum"].is_set() and not op_info["em_andamento"]:
-                    op_info["em_andamento"] = True
-                    conduzir_multicast = True
-            else:
-                seq_id = self.next_seq
-                self.next_seq += 1
-                self.op_to_seq[chave_op] = seq_id
-
-                op_info = {
-                    "dados_op": (id_cliente, id_req, valor),
-                    "rms_que_votaram": set(),
-                    "votos_concordantes": {},
-                    "resultado_final": None,
-                    "evento_quorum": threading.Event(),
-                    "em_andamento": True,
-                }
-                self.operacoes[seq_id] = op_info
-                self.pendentes.add(seq_id)
-                conduzir_multicast = True
-                log_recebida = (
-                    f"[FE {self.ip_maq}] Requisição recebida (client={id_cliente}, "
-                    f"req={id_req}, val={valor}) -> seq_id={seq_id} | "
-                    f"Quórum atual: {self.formatar_quorum()}"
-                )
-            if not self.rms_ativos and not op_info["evento_quorum"].is_set():
-                self._resolver_sem_rms(seq_id, op_info)
-                conduzir_multicast = False
-
-        if log_recebida is not None:
-            print(protocolo.colorir(log_recebida, protocolo.COLOR_FE), flush=True)
-
-        if op_info["evento_quorum"].is_set() and op_info["resultado_final"] is not None:
-            num_reqs, total_sum = op_info["resultado_final"]
-            self.sock_cliente.sendto(
-                protocolo.pack_ack(id_cliente, id_req, num_reqs, total_sum), addr
-            )
-            return
-
-        if conduzir_multicast:
-            pacote_mc = protocolo.pack_order_multicast(seq_id, id_cliente, id_req, valor)
-            self.multicast_rms(pacote_mc)
-
-            tentativas = 0
-            try:
-                while not op_info["evento_quorum"].wait(timeout=0.005):
-                    if not check_lider():
-                        return
-                    tentativas += 1
-                    self.multicast_rms(pacote_mc)
-                    if tentativas >= 200:
-                        return
-            finally:
-                with self.lock_fe:
-                    op_info["em_andamento"] = False
-        else:
-            op_info["evento_quorum"].wait(timeout=0.25)
-
-        if op_info["evento_quorum"].is_set() and op_info["resultado_final"] is not None:
-            num_reqs, total_sum = op_info["resultado_final"]
-            self.sock_cliente.sendto(
-                protocolo.pack_ack(id_cliente, id_req, num_reqs, total_sum), addr
-            )
 
     def tratar_rm_ack(self, dados):
         try:

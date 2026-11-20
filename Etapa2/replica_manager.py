@@ -56,7 +56,12 @@ class ReplicaManager:
                 aplicou, resultados = self.buffer.processar(
                     seq_id, id_cliente, id_req, valor
                 )
-            except (ConflitoSequenciaError, OperacaoJaSequenciadaError, ValueError) as e:
+            except OperacaoJaSequenciadaError:
+                aplicou = False
+                resultados = self.buffer.resolver_duplicata_resequenciada(
+                    seq_id, id_cliente, id_req
+                )
+            except (ConflitoSequenciaError, ValueError) as e:
                 print(
                     protocolo.colorir(
                         f"[RM {self.ip_maq}] Erro de ordenação: {e}",

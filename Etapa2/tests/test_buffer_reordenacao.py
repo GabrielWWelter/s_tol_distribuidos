@@ -91,6 +91,17 @@ class TestBufferReordenacao(unittest.TestCase):
         self.assertEqual(self.buf.expected_seq, 2)
         self.assertEqual(self.buf.total_sum, 10)
 
+    def test_resolver_duplicata_resequenciada_nao_duplica_nem_bloqueia_sequencia(self):
+        self.buf.processar(1, 1001, 1, 10)
+        self.buf.processar(3, 1002, 1, 25)
+
+        aplicadas = self.buf.resolver_duplicata_resequenciada(2, 1001, 1)
+
+        self.assertEqual(len(aplicadas), 2)
+        self.assertEqual(self.buf.expected_seq, 4)
+        self.assertEqual(self.buf.num_reqs, 2)
+        self.assertEqual(self.buf.total_sum, 35)
+
     def test_mesmo_id_req_de_clientes_diferentes_e_valido(self):
         self.buf.processar(1, 1001, 1, 10)
         self.buf.processar(2, 1002, 1, 20)
