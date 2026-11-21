@@ -88,77 +88,15 @@
     Porto Alegre, 2026/2
 \end{titlepage}
 
-\tableofcontents
-\newpage
 
 \section{Introdução}
 
-Este trabalho estende o serviço de soma construído na primeira parte da
-disciplina. O serviço recebe números inteiros positivos de diferentes clientes,
-mantém a quantidade de requisições processadas e devolve a soma acumulada após
-cada operação. Na Parte 2, um único processo servidor deixa de ser suficiente:
-os servidores podem assumir dinamicamente os papéis de \emph{front-end} (FE) ou
-\emph{replica manager} (RM), com replicação ativa, detecção de falhas e eleição
-de líder.
+Para esta etapa do trabalho prático foram necessárias modificações amplas e a adição de novas funcionalidades para que múltiplos servidores pudessem assumir os papéis de \textit{front-end} e \textit{replica-manager}. Enquanto o \textit{front-end} funciona como um comunicador entre clientes e o sequenciador global,  associando um \textit{seq\_id} a cada operação, que é disseminado para o \textit{replica-manager}. Por sua vez, cada replica manager tem um acumulador próprio e aplica as operações na ordem global. Uma resposta é consolidada apenas quando o número de respostas satisfaz o quórum. Em caso de falha do \textit{front-end}, os \textit{replica-managers} realizam uma eleição em anel, no qual o servidor de maior endereço IP se torna o líder.
 
-O FE é o ponto de contato dos clientes e o sequenciador global. Ele associa um
-\arquivo{seq\_id} monotônico a cada nova operação e a dissemina aos RMs. Cada RM
-mantém seu próprio acumulador e aplica as operações na ordem global. O FE somente
-consolida uma resposta quando recebe confirmações concordantes em número
-suficiente para o quórum vigente. Quando o FE falha, os RMs executam uma eleição
-em anel, na qual o servidor de maior endereço IP ativo torna-se o novo líder.
 
-\section{Ambiente de desenvolvimento e testes}
+A implementação usou como base o código da primeira etapa do trabalho prático. Para o módulo \textit{cliente.py} a thread de leitura, a fila, a descoberta via broadcast passou e o protocolo stop-and-wait foram reutílizados, mas com um \textbf{client\_id} de $64$ bits e um sistema de redescoberta após sucessivos timeouts. O módulo \textit{protocolo,py} preservou a descoberta, a requisição e o ACK, no entanto, foi necessário a adição de identidade de cliente, mensagens de orde, confirmação, heartbeat, topologia, sincronização e eleição. O módulo \textit{servidor.py} teve o loop UDP e a organização de subserviços mantida, com a adição de alternância entre \textit{front-end} e \textit{replica-manager.}
 
-A Tabela~\ref{tab:ambiente} registra o ambiente utilizado na revisão atual do
-projeto. Caso os experimentos finais de carga sejam executados em outra máquina,
-esta seção deverá ser atualizada com os dados daquela máquina.
-
-\begin{table}[htbp]
-    \centering
-    \caption{Ambiente usado nos testes atuais.}
-    \label{tab:ambiente}
-    \begin{tabularx}{\textwidth}{>{\bfseries}l X}
-        \toprule
-        Item & Configuração \\
-        \midrule
-        Sistema operacional & Fedora Linux 44 KDE Plasma Desktop Edition, kernel Linux 7.3.4, arquitetura x86-64 \\
-        Processador & AMD Ryzen 7 6800H, 8 núcleos e 16 threads \\
-        Memória & 14 GiB de RAM e 8 GiB de swap \\
-        Linguagem & Python 3.14.10 \\
-        Compilador C & GCC 16.2.1, utilizado apenas pelos artefatos auxiliares herdados da Parte 1 \\
-        Comunicação & Sockets UDP IPv4; endereços de loopback distintos nos testes com múltiplos servidores \\
-        \bottomrule
-    \end{tabularx}
-\end{table}
-
-\section{Evolução da Parte 1 para a Parte 2}
-
-A implementação foi construída como evolução direta da Parte 1. A
-Tabela~\ref{tab:evolucao} resume o reaproveitamento dos módulos e as principais
-alterações arquiteturais.
-
-\begin{table}[htbp]
-    \centering
-    \caption{Evolução dos módulos da Parte 1.}
-    \label{tab:evolucao}
-    \begin{tabularx}{\textwidth}{>{\ttfamily}l X}
-        \toprule
-        \normalfont\bfseries Módulo & \normalfont\bfseries Evolução \\
-        \midrule
-        cliente.py & Preserva a thread de leitura, a fila, a descoberta por broadcast e o protocolo stop-and-wait. Passou a gerar um \arquivo{client\_id} de 64 bits e a redescobrir o FE após sucessivos timeouts. \\
-        protocolo.py & Preserva descoberta, requisição e ACK. Foram adicionadas a identidade do cliente e as mensagens internas de ordem, confirmação, heartbeat, topologia, sincronização e eleição. \\
-        servidor.py & O loop UDP e a organização em subserviços foram reaproveitados. O processo agora descobre o cluster e pode alternar entre FE e RM. \\
-        testes & Os oito testes da Parte 1 permanecem como regressão. A Parte 2 acrescenta testes de protocolo, ordenação, quórum, falhas, eleição e sincronização. \\
-        \bottomrule
-    \end{tabularx}
-\end{table}
-
-A identidade de uma operação mudou de uma associação implícita ao endereço do
-cliente para o par \arquivo{(client\_id, id\_req)}. Essa mudança é necessária
-porque clientes diferentes podem produzir o mesmo \arquivo{id\_req}, além de
-permitir que uma requisição mantenha sua identidade quando o cliente descobre um
-novo FE.
+Por fim, para evitar que clientes pudessem produzir um mesmo \textit{id\_req} e permitir que requisições mantivessem sua identidade reservada quando um novo \textit{front-end} fosse descoberto, as operações passarão a ser um par (\textit{client\_id}, \textit{id\_req}).
 
 \section{Arquitetura da solução}
 
