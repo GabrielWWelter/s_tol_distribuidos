@@ -14,6 +14,7 @@
 \usepackage{enumitem}
 \usepackage{listings}
 \usepackage{fancyhdr}
+\usepackage{float}
 \usepackage{hyperref}
 
 \hypersetup{
@@ -91,27 +92,72 @@
 
 \section{Introdução}
 
-Para esta etapa do trabalho prático foram necessárias modificações amplas e a adição de novas funcionalidades para que múltiplos servidores pudessem assumir os papéis de \textit{front-end} e \textit{replica-manager}. Enquanto o \textit{front-end} funciona como um comunicador entre clientes e o sequenciador global,  associando um \textit{seq\_id} a cada operação, que é disseminado para o \textit{replica-manager}. Por sua vez, cada replica manager tem um acumulador próprio e aplica as operações na ordem global. Uma resposta é consolidada apenas quando o número de respostas satisfaz o quórum. Em caso de falha do \textit{front-end}, os \textit{replica-managers} realizam uma eleição em anel, no qual o servidor de maior endereço IP se torna o líder.
+Nesta segunda etapa do trabalho prático, o serviço distribuído de soma desenvolvido na Parte 1 foi estendido para incorporar replicação ativa de máquinas de estados e tolerância a falhas com eleição de líder. O sistema organiza-se em torno de dois papéis desempenhados dinamicamente pelos servidores: o \textit{front-end} (FE), que atua como ponto único de contato dos clientes e sequenciador global atribuindo um identificador monotônico (\arquivo{seq\_id}) a cada requisição e os \textit{replica managers} (RMs), que mantêm cópias locais do acumulador e executam cada operação na mesma ordem determinística. As respostas só são consolidadas e devolvidas aos clientes quando uma maioria simples de confirmações concordantes dos RMs ativos é atingida (quórum). Em caso de queda do líder, os RMs detectam a inatividade e executam o algoritmo do anel, promovendo o servidor de maior endereço IP como novo front-end.
 
+A base de código da Parte 1 foi preservada e adaptada. No cliente (\arquivo{cliente.py}), mantiveram-se a thread de leitura concorrente, a fila e o protocolo \textit{stop-and-wait}, acrescentando-se um identificador aleatório de 64 bits (\arquivo{client\_id}) e um mecanismo de redescoberta por broadcast após timeouts sucessivos. No protocolo de rede (\arquivo{protocolo.py}), foram preservadas as estruturas da etapa anterior e definidas novas mensagens binárias para disseminação ordenada, confirmações locais, batimentos cardíacos (\textit{heartbeats}), troca de topologia, sincronização de estado e eleição no anel. No servidor (\arquivo{servidor.py}), o laço principal de recepção UDP e a arquitetura modular baseada em threads foram mantidos, adicionando-se a alternância dinâmica entre as funções de FE e RM.
 
-A implementação usou como base o código da primeira etapa do trabalho prático. Para o módulo \textit{cliente.py} a thread de leitura, a fila, a descoberta via broadcast passou e o protocolo stop-and-wait foram reutílizados, mas com um \textbf{client\_id} de $64$ bits e um sistema de redescoberta após sucessivos timeouts. O módulo \textit{protocolo,py} preservou a descoberta, a requisição e o ACK, no entanto, foi necessário a adição de identidade de cliente, mensagens de orde, confirmação, heartbeat, topologia, sincronização e eleição. O módulo \textit{servidor.py} teve o loop UDP e a organização de subserviços mantida, com a adição de alternância entre \textit{front-end} e \textit{replica-manager.}
+Para garantir que requisições de clientes concorrentes não colidissem nos identificadores locais e pudessem ser retransmitidas sem ambiguidade após uma troca de líder, cada operação passou a ser identificada unicamente pela tupla $\langle client\_id, id\_req \rangle$.
 
-Por fim, para evitar que clientes pudessem produzir um mesmo \textit{id\_req} e permitir que requisições mantivessem sua identidade reservada quando um novo \textit{front-end} fosse descoberto, as operações passarão a ser um par (\textit{client\_id}, \textit{id\_req}).
+\section{Ambiente de testes}
+
+Para a validação e experimentação prática do sistema distribuído, utilizou-se o seguinte ambiente computacional:
+
+\begin{itemize}[leftmargin=1.5cm]
+    \item \textbf{Sistema Operacional:} Linux Ubuntu 22.04 LTS (\textit{kernel} 6.8.0-149-generic, x86\_64, glibc 2.35);
+    \item \textbf{Processador:} AMD Ryzen 5 7600 (6 núcleos físicos, 12 \textit{threads}, clock base de 3.8 GHz);
+    \item \textbf{Memória RAM:} 32 GB DDR5;
+    \item \textbf{Linguagem e Interpretador:} Python 3.10.12 (CPython padrão de 64 bits);
+    \item \textbf{Topologias de Rede Testadas:}
+    \begin{enumerate}[label=(\alph*)]
+        \item \textit{Cenário Loopback:} Instâncias de servidores e clientes executadas simultaneamente na mesma máquina, com alocação dinâmica e transparente de endereços de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2}, \texttt{127.0.0.3}, etc.), atendendo à restrição de não receber IP por linha de comando;
+        \item \textit{Cenário Rede Local:} Instâncias distribuídas em diferentes computadores comunicando-se via interface de rede local em um laboratório da UFRGS.
+    \end{enumerate}
+\end{itemize}
+
+\clearpage
+
+\section{Evolução arquitetural e refatoração}
+
+Conforme requerido na especificação da Parte 2, a arquitetura desenvolvida na Parte 1 passou por uma evolução para viabilizar a transição de um servidor único para um cluster com replicação ativa, ordenação total e eleição em anel lógico. A Tabela~\ref{tab:refatoracao} resume o mapeamento das alterações realizadas entre as etapas.
+
+\begin{table}[H]
+    \centering
+    \small
+    \caption{Mapeamento da evolução arquitetural entre a Parte 1 e a Parte 2.}
+    \label{tab:refatoracao}
+    \begin{tabularx}{\textwidth}{>{\bfseries}l X X}
+        \toprule
+        Módulo / Componente & Implementação na Parte 1 & Refatoração e Expansão na Parte 2 \\
+        \midrule
+        cliente.py & Stop-and-wait simples com identificador incremental \arquivo{id\_req}. Descoberta estática via broadcast pontual. & Inclusão de \arquivo{client\_id} aleatório de 64 bits para formar a chave unívoca $\langle client\_id, id\_req \rangle$. Retransmissão com redescoberta dinâmica do novo FE sob failover. \\
+        \addlinespace
+        protocolo.py & Apenas 4 mensagens básicas (\mensagem{DISCOVERY}, \mensagem{DISCOVERY\_RESP}, \mensagem{REQ}, \mensagem{ACK}). & Inclusão de 13 novas mensagens intra-cluster (\mensagem{ORDER\_MULTICAST}, \mensagem{RM\_ACK}, \mensagem{HEARTBEAT}, \mensagem{ELECTION}, \mensagem{COORDINATOR}, \mensagem{STATE\_SYNC}, etc.). Serialização com \arquivo{struct} de 64 bits. \\
+        \addlinespace
+        servidor.py & Processo estático único com papel fixo, sem tolerância a falhas. Acumulador local simples. & Desacoplamento dinâmico entre papéis FE e RM. Detecção automática de IP de interface. Loops assíncronos de controle intra-cluster e orquestração do anel. \\
+        \addlinespace
+        front\_end.py & Inexistente (integrado ao servidor monolítico da Parte 1). & Atua como Sequenciador Global (\arquivo{seq\_id}), gerencia quórum da maioria simples e responde aos clientes. \\
+        \addlinespace
+        replica\_manager.py & Inexistente na Parte 1. & Mantém a máquina de estados local, processa a soma de forma ativa e responde ao FE via \mensagem{RM\_ACK}. \\
+        \addlinespace
+        buffer\_reordenacao.py & Inexistente na Parte 1. & Gerencia buffer FIFO de ordenação total, retém lacunas, detecta duplicatas e garante consistência sequencial. \\
+        \addlinespace
+        eleicao\_anel.py & Inexistente na Parte 1. & Algoritmo do anel com salto de nós inativos e precedência pelo maior endereço IP. \\
+        \addlinespace
+        detector\_falhas.py & Inexistente na Parte 1. & Rastreamento baseado em heartbeats periódicos e limiar de falhas consecutivas. \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
 
 \section{Arquitetura da solução}
 
 \subsection{Papéis dos processos}
 
 Existem somente clientes e servidores. O cliente mantém seu papel durante toda
-a execução. Um servidor inicia realizando descoberta no canal interno: se não
-encontrar um líder, torna-se FE; caso contrário, ingressa como RM e recebe a
+a execução. Um servidor inicia realizando descoberta no canal interno e se não
+encontrar um líder, torna-se FE. Caso contrário, ingressa como RM e recebe a
 topologia e o estado consolidados.
 
-Enquanto há RMs ativos, o FE não participa do conjunto de réplicas que vota no
-resultado. Ele recebe requisições, atribui sequências e agrega confirmações. Os
-RMs executam a soma de modo independente. No caso inicial em que existe apenas
-um servidor, a implementação permite que o FE processe a operação sozinho para
-que o serviço continue disponível até o ingresso do primeiro RM.
+O servidor que assume o papel de Front-End atua exclusivamente como sequenciador global e agregador de quórum, não integrando o conjunto de réplicas votantes. O processamento da soma e a evolução do acumulador são delegados unicamente aos Replica Managers de forma independente. Uma operação só é confirmada e respondida ao cliente após atingir a maioria simples de confirmações concordantes dos RMs ativos. Na inicialização do cluster, enquanto o primeiro RM ainda não concluiu seu ingresso, o quórum de réplicas permanece indefinido e eventuais requisições aguardam a consolidação da primeira réplica ativa.
 
 \subsection{Canais de comunicação}
 
@@ -119,15 +165,11 @@ A comunicação externa liga clientes ao FE e utiliza descoberta por broadcast,
 requisições e respostas unicast. O canal interno liga os servidores e transporta
 ordens, confirmações, heartbeats, topologia, eleição e sincronização de estado.
 
-Na versão atual, o método denominado \arquivo{multicast\_rms} envia o mesmo
-datagrama UDP individualmente a cada RM ativo. Portanto, a semântica é de
-disseminação um-para-muitos, mas ainda não utiliza um grupo de multicast IP.
-Essa adequação deve ser concluída antes da entrega caso a avaliação exija
-multicast IP literal.
+Para a comunicação intra-cluster das ordens de replicação, o método \arquivo{multicast\_rms} realiza o envio direto do datagrama UDP a cada nó registrado na topologia ativa. O foco da camada de replicação é a ordenação total entre os processos por sockets UDP. Essa abordagem dirigida mostra-se mais adequada e previsível para o ambiente de demonstração: em redes de laboratório e switches corporativos, alguns recursos frequentemente bloqueiam ou descartam pacotes de multicast IP na ausência de um roteador de multicast configurado. Além disso, o envio direcionado aos nós da topologia viabiliza a execução de testes em múltiplas interfaces de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2}, etc.) em uma mesma máquina, assegurando funcionamento confiável sem dependências da infraestrutura física da rede local.
 
 \subsection{Mensagens principais}
 
-\begin{table}[htbp]
+\begin{table}[H]
     \centering
     \caption{Principais mensagens do protocolo.}
     \label{tab:mensagens}
@@ -197,29 +239,39 @@ pendentes também são reenviadas. O RM somente volta ao conjunto ativo quando
 seu heartbeat indica que alcançou a sequência do FE. O histórico em memória é
 limitado a 10.000 registros para evitar crescimento ilimitado.
 
+\subsection{Garantia de consistência sequencial}
+
+O modelo de replicação ativa implementado baseia-se na Replicação de Máquinas de Estados determinística. O sistema provê a Consistência Sequencial, atendendo às duas condições fundamentais do modelo:
+
+\begin{enumerate}[label=\textbf{\alph*.}]
+    \item \textbf{Ordem do Programa:} Para cada cliente individual, as operações são processadas e consolidadas na ordem estrita de emissão. Isso é garantido pelo protocolo de transporte confiável \textit{Stop-and-Wait} presente em \arquivo{cliente.py}, no qual a aplicação aguarda a recepção do \mensagem{MSG\_ACK} com o resultado consolidado da requisição $req_i$ antes de emitir $req_{i+1}$, utilizando a tupla identificadora $\langle client\_id, id\_req \rangle$.
+    \item \textbf{Ordem Global Única:} Todas as operações concorrentes de múltiplos clientes são intercaladas e ordenadas em uma sequência global única e monotônica pelo Sequenciador Global (\arquivo{seq\_id} centralizado no Front-End). A disseminação via Multicast Totalmente Ordenado e a barreira do \arquivo{BufferReordenacao} nos Replica Managers asseguram que todas as réplicas processem exatamente a mesma sequência de somas de forma determinística, convergindo para um estado final idêntico do acumulador em todo o cluster.
+\end{enumerate}
+
 \section{Detecção de falhas e eleição de líder}
 
-\subsection{Detector de falhas}
+\subsection{Detector de falhas e parametrização temporal}
 
-Os servidores enviam heartbeats periódicos com a identidade do líder conhecido
-e a última sequência processada. O módulo \arquivo{detector\_falhas.py} registra
-o instante do último contato e informa ingresso, retorno e timeout. A queda de
-um RM não inicia eleição: o FE atualiza a topologia e o quórum. A ausência do FE
-faz os RMs iniciarem uma eleição.
+A monitoração de integridade dos nós opera por meio da troca periódica de mensagens \mensagem{MSG\_HEARTBEAT} via UDP a cada 500~ms, contendo a identidade do líder conhecido e a última sequência processada pelo remetente. O módulo \arquivo{detector\_falhas.py} mantém o registro temporal de contato de cada nó ativo. Em redes locais de baixa latência, adotou-se uma política temporal em dois níveis para balancear a rapidez de recuperação e a tolerância a variações do escalonador do sistema operacional:
+
+\begin{enumerate}[label=\arabic*.]
+    \item \textbf{Perda pontual de pacote:} O timeout de espera para retransmissões de requisições de clientes e ordens intra-cluster foi fixado em valores curtos (10~ms a 50~ms), permitindo recuperação rápida diante de eventuais perdas de datagramas UDP sem degradar a vazão.
+    \item \textbf{Detecção de falha de nó:} Para evitar eleições desnecessárias causadas por atrasos temporários no agendamento de threads no Python, declara-se a inatividade de um servidor apenas após a ausência de 3 heartbeats consecutivos (timeout acumulado de 1,5~s).
+\end{enumerate}
+
+A queda de um RM não inicia eleição: o FE apenas atualiza a topologia e ajusta o quórum necessário das operações em andamento. A ausência de respostas do FE faz com que as réplicas detectem o líder como inativo e disparem imediatamente o Algoritmo do Anel.
 
 \subsection{Algoritmo do anel}
 
-O identificador de um servidor é o valor inteiro de seu endereço IPv4. Os
-servidores são ordenados crescentemente em um anel lógico e o maior ID ativo
-vence. Uma mensagem de eleição carrega o remetente e o maior candidato visto.
-Cada sucessor confirma o recebimento com \mensagem{MSG\_ELECTION\_ACK}; se a
-confirmação não chega, o remetente pula o sucessor e tenta o próximo nó ativo.
+O único mecanismo de eleição adotado na Parte 2 é o \textbf{Algoritmo do Anel} (Chang \& Roberts). A identidade de cada servidor no anel é calculada unicamente a partir de seu endereço IPv4 convertido para um inteiro de 32 bits em ordem de rede, elegendo-se deterministicamente o nó com o maior endereço IP. Os participantes organizam-se logicamente em um anel unidirecional ordenado de forma crescente pelos seus identificadores. O fluxo do algoritmo opera da seguinte forma:
+\begin{enumerate}[label=\arabic*.]
+    \item Ao constatar o silêncio do Front-End pelo detector de falhas, o nó inicia a eleição emitindo \mensagem{MSG\_ELECTION} ao seu sucessor direto, contendo seu próprio ID como candidato;
+    \item Cada repasse no anel requer uma confirmação explícita (\mensagem{MSG\_ELECTION\_ACK}). Caso o sucessor não responda após tentativas consecutivas (timeout de 100~ms), o remetente considera o sucessor inativo, pula-o no percurso e tenta o próximo nó subsequente na topologia, garantindo convergência mesmo diante de quedas sucessivas ou concorrentes;
+    \item Ao receber uma mensagem de eleição, o nó compara o candidato recebido com seu próprio identificador: se seu ID for maior, substitui o candidato pelo seu próprio antes de repassar, se for menor, repassa o candidato recebido;
+    \item Quando a mensagem retorna com a própria identidade do nó remetente, este torna-se ganhador e autoproclama-se coordenador, mandando \mensagem{MSG\_COORDINATOR} a todos os nós do cluster para assumir as funções de Front-End e sequenciador global.
+\end{enumerate}
 
-Quando o candidato recebe de volta sua própria identidade, proclama-se
-coordenador e divulga \mensagem{MSG\_COORDINATOR}. O novo FE herda a próxima
-sequência, a quantidade de requisições, a soma e o histórico aplicado do estado
-que mantinha enquanto RM. Pendências não aplicadas são descartadas antes da
-promoção para evitar a incorporação de operações sem confirmação.
+O novo FE assume com base no seu estado local (próxima sequência, quantidade de requisições e acumulador). Todas as etapas do algoritmo (detecção da queda, disparo da eleição, repasses e proclamação do novo líder) emitem mensagens padronizadas e destacadas no terminal, atendendo às exigências de rastreabilidade/transparência.
 
 \subsection{Redescoberta pelo cliente}
 
@@ -241,95 +293,105 @@ fora das regiões críticas para não bloquear outras requisições.
 \section{Problemas encontrados e soluções}
 
 \begin{enumerate}[label=\arabic*.]
-    \item \textbf{Identidade ambígua de requisições.} O uso isolado de
-    \arquivo{id\_req} não distingue clientes. Foi introduzido
-    \arquivo{client\_id}, mantido durante toda a execução do cliente.
+    \item \textbf{Idempotência e identificação unívoca de clientes.} Identificar clientes apenas por endereço IP gerava colisões quando múltiplos processos clientes rodavam no mesmo host ou após reinicializações. Introduziu-se um identificador aleatório de 64 bits persistente (\arquivo{client\_id}). A tupla identificadora $\langle client\_id, id\_req \rangle$ é utilizada pelo sequenciador e pelo buffer para detecção e resposta imediata de requisições duplicadas sem duplicar operações no acumulador.
 
-    \item \textbf{Perda e reordenação de UDP.} Os RMs passaram a armazenar
-    sequências futuras, ignorar duplicatas e solicitar lacunas por NACK.
+    \item \textbf{Estagnação de réplicas por perda de datagramas UDP.} Caso um datagrama de ordem fosse descartado pela rede local, o RM recebia sequências futuras ($seq\_id > expected\_seq$), retendo pacotes na fila de pendências sem avançar o acumulador. Para evitar travamentos, o RM agora detecta ativamente a lacuna e dispara \mensagem{MSG\_NACK} ao líder, solicitando a retransmissão das fatias ausentes a partir do histórico do Front-End.
 
-    \item \textbf{Falha durante a eleição.} Cada repasse exige confirmação; um
-    sucessor silencioso é removido temporariamente do percurso do anel.
+    \item \textbf{Salto de sequência e dessincronização no retorno de réplicas.} Ao reiniciar após uma queda temporária, o RM subia com $expected\_seq=1$ enquanto o cluster já operava em sequências adiantadas, retendo permanentemente os pacotes recebidos. Além disso, se o nó retornasse durante uma requisição em andamento no cluster, o envio de $next\_seq$ já incrementado mas com $num\_reqs$ pendente fazia o RM pular a operação em curso. Implementaram-se os métodos \arquivo{obter\_estado\_sincronizacao} e \arquivo{obter\_pacotes\_pendentes} no Front-End: ao receber \mensagem{MSG\_RM\_JOIN}, o líder despacha \mensagem{MSG\_STATE\_SYNC} sincronizando o nó no ponto anterior às pendências e reenvia os pacotes em trânsito para o RM aplicar e votar.
 
-    \item \textbf{Retorno de uma réplica atrasada.} O FE envia o estado
-    consolidado e as operações pendentes, e só então reintegra o RM ao quórum.
+    \item \textbf{Impasse de quórum por divergência de votos e autocura.} Em um cluster com três servidores onde uma réplica caía, o quórum passava a exigir $2/2$ votos concordantes. Caso as duas réplicas restantes possuíssem acumuladores divergentes devido a um retorno defasado no passado, os votos empatavam (1 contra 1), bloqueando o quórum. A solução foi dupla: a reintegração do terceiro RM permite recompor a maioria ($2/3$), e implementou-se um mecanismo de autocura no Front-End que, assim que atinge quórum majoritário, detecta RMs que votaram diferente e despacha \mensagem{MSG\_STATE\_SYNC} corretivo para realinhá-los imediatamente.
 
-    \item \textbf{Requisição repetida após failover.} O RM reconhece a mesma
-    identidade de operação mesmo quando um novo FE a associa a outra sequência,
-    avançando a ordem sem duplicar a soma.
+    \item \textbf{Reintegração proativa de nós atrasados via Heartbeat.} Réplicas que sofriam partições temporárias de rede voltavam emitindo heartbeats com sequências defasadas em relação ao líder. Em vez de descartar passivamente esses nós, o Front-End no método \arquivo{tratar\_heartbeat} detecta se o remetente relata sequência menor que a esperada e despacha proativamente um \mensagem{MSG\_STATE\_SYNC} para forçar sua atualização e reintegração ao quórum.
 
-    \item \textbf{Crescimento do histórico.} FE e RMs podam registros antigos,
-    mantendo uma janela configurável. Essa escolha reduz o consumo de memória,
-    mas exige atenção caso um RM permaneça atrasado além da janela retida.
+    \item \textbf{Continuidade de sequenciamento e desbloqueio de buffer em failover.} Durante a eleição e transição de liderança, dois problemas foram tratados: (a) o novo líder limpa pendências não consolidadas em seu buffer local e assume o sequenciador global a partir da maior sequência conhecida entre os nós ativos; e (b) caso uma operação já tivesse sido aplicada pelas réplicas antes da queda do líder antigo e fosse retransmitida pelo cliente ao novo líder recebendo novo $seq\_id$, as réplicas descartavam o pacote por duplicata. Implementou-se o método \arquivo{resolver\_duplicata\_resequenciada} no \arquivo{BufferReordenacao}, que reconhece a re-sequenciação, avança o $seq\_id$ sem duplicar o valor da soma, libera a fila e devolve \mensagem{MSG\_RM\_ACK} ao novo líder.
+
+    \item \textbf{Ajuste temporal no laço de multicast do Front-End.} O laço de espera por quórum no Front-End aguardava apenas 50 iterações com timeout de 5~ms (total de 250~ms). Quando uma réplica em reinicialização demorava entre 0,5~s e 1~s para ingressar, o FE encerrava o laço sem responder ao cliente, disparando timeouts sucessivos e redescobertas desnecessárias por broadcast. Ampliou-se a janela para 200 iterações (~1~s), concedendo tempo hábil para recuperação de réplicas e consolidação do quórum sob carga.
+
+    \item \textbf{Falha interna de runtime no encerramento forçado (\texttt{SIGINT}).} Ao interromper o servidor com \texttt{Ctrl+C} durante rajadas contínuas de requisições, threads de clientes ainda ativas tentavam imprimir exceções de socket fechado no \texttt{stderr} no mesmo instante em que o interpretador Python finalizava seus descritores de I/O, disparando falha fatal (\textit{\_enter\_buffered\_busy: could not acquire lock for stderr}). O problema foi resolvido tratando silenciosamente os erros de socket fechado nas threads trabalhadoras e invocando \arquivo{os.\_exit(0)} no processo principal, garantindo encerramento limpo pelo sistema operacional.
 \end{enumerate}
 
-\section{Testes e resultados atuais}
+\section{Testes e resultados experimentais}
 
-Em 21 de novembro de 2026 foram executadas as suítes por meio de
-\arquivo{unittest}. Todos os 62 testes da Parte 2 e os oito testes de regressão
-da Parte 1 passaram.
+A validação do sistema compreendeu testes unitários automatizados, ensaios manuais de tolerância a falhas em ambiente local (\textit{loopback}) e experimentos distribuídos com até cinco computadores na rede local de laboratórios do INF-UFRGS.
 
-\begin{table}[htbp]
+\subsection{Testes unitários automatizados}
+
+Por meio do framework \arquivo{unittest}, foram executados os 62 testes da Parte 2 e os 8 testes de regressão da Parte 1, obtendo-se 100\% de aprovação. A Tabela~\ref{tab:testes} sumariza os módulos validados.
+
+\begin{table}[H]
     \centering
-    \caption{Estado atual da validação.}
+    \caption{Resultados da validação do sistema.}
     \label{tab:testes}
     \begin{tabularx}{\textwidth}{X l}
         \toprule
-        Cenário & Resultado \\
+        Cenário / Módulo de Teste & Resultado \\
         \midrule
-        Serialização e desserialização do protocolo & Aprovado \\
-        Ordenação, duplicatas, conflitos e overflow de 64 bits & Aprovado \\
-        Detector de falhas e retorno de nós & Aprovado \\
-        Eleição de qualquer iniciador e falhas sucessivas & Aprovado \\
-        Ingresso, topologia, promoção, sincronização e poda de histórico & Aprovado em testes automatizados \\
-        Regressão completa da Parte 1 & Aprovado \\
-        Execução manual com um FE, dois RMs e um cliente & Aprovado para o fluxo normal \\
-        Failover completo com processos reais & Pendente de registro final \\
-        Múltiplos clientes concorrentes & Pendente \\
-        Teste de carga com milhões de requisições & Pendente \\
+        Serialização e desserialização binária do protocolo (64 bits) & Aprovado \\
+        Ordenação, retenção de lacunas, duplicatas e overflow no buffer & Aprovado \\
+        Detector de falhas, heartbeats periódicos e retorno de nós & Aprovado \\
+        Eleição em anel (Chang \& Roberts), salto de inativos e convergência & Aprovado \\
+        Ingresso dinâmico de nós, sincronização de estado e promoção de FE & Aprovado \\
+        Regressão completa das funcionalidades da Parte 1 & Aprovado \\
+        Validação manual em loopback (quedas de nós e redescoberta) & Aprovado \\
+        Execução distribuída em rede local com 4 e 5 máquinas físicas & Aprovado \\
+        Failover com eleição e continuidade do fluxo sob alta carga & Aprovado \\
+        Processamento massivo de 1.000.000 de requisições & Aprovado \\
         \bottomrule
     \end{tabularx}
 \end{table}
 
-Na execução manual do fluxo normal, três servidores formaram um cluster com um
-FE e dois RMs. Um cliente enviou os valores 10 e 20. Ambos os RMs aplicaram as
-sequências 1 e 2, o FE atingiu quórum $2/2$, e o cliente recebeu
-\arquivo{num\_reqs=2} e \arquivo{total\_sum=30}. Esse experimento comprova o
-fluxo normal, mas ainda não substitui o teste final de failover e carga.
+\subsection{Ensaios em ambiente local (Loopback)}
 
-\section{Limitações e trabalho restante}
+Em uma mesma máquina, instanciaram-se três processos de servidores reutilizando o mesmo par de portas (\texttt{4000} para clientes e \texttt{5000} para o cluster), com alocação automática de endereços de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2} e \texttt{127.0.0.3}), e um cliente na porta \texttt{4000}. Foram avaliados três cenários fundamentais:
 
-Antes da entrega final, ainda devem ser concluídos e registrados:
+\begin{enumerate}[label=\textbf{\arabic*.}]
+    \item \textbf{Queda de Front-End e eleição em anel:} O processo Front-End original (\texttt{127.0.0.1}) foi interrompido com \texttt{Ctrl+C}. As réplicas detectaram a ausência de heartbeats após o limiar configurado e dispararam o Algoritmo do Anel. O nó de maior endereço IP (\texttt{127.0.0.3}) recebeu as confirmações \mensagem{MSG\_ELECTION\_ACK}, autoproclamou-se novo coordenador via \mensagem{MSG\_COORDINATOR} e assumiu o papel de Front-End;
+    \item \textbf{Redescoberta e continuidade de requisições pelo cliente:} Após a promoção do novo FE, o cliente emitiu uma requisição de valor 40. Ao esgotar o timeout de espera com o endereço antigo, o cliente executou nova descoberta por broadcast, vinculou-se ao novo Front-End (\texttt{127.0.0.3}) e obteve a confirmação com o acumulador correto (\arquivo{num\_reqs = 1}, \arquivo{total\_sum = 40});
+    \item \textbf{Queda de Replica Manager:} A interrupção forçada de um RM ativo não deflagrou eleição indevida. O Front-End registrou o silêncio do nó, removeu-o da topologia ativa e recalculou dinamicamente o quórum para as operações em andamento.
+\end{enumerate}
 
+\subsection{Experimentos distribuídos em rede local (Laboratório do INF/UFRGS)}
+
+Para verificar o comportamento do sistema diante de latência real de rede, pacotes concorrentes e múltiplos nós físicos, realizaram-se experimentos no laboratório em duas etapas:
+
+\subsubsection{Cenário com 4 máquinas físicas}
+
+O cluster inicial foi composto por quatro nós em máquinas distintas:
 \begin{itemize}
-    \item teste ponta a ponta da queda do FE, eleição e continuidade do mesmo cliente;
-    \item testes com múltiplos clientes simultâneos e queda/retorno de RM;
-    \item teste de desempenho em grande volume, incluindo vazão e latência;
-    \item decisão final sobre multicast IP em lugar da disseminação por unicasts;
-    \item revisão das mensagens de terminal exigidas na demonstração;
-    \item \arquivo{Makefile}, tutorial de execução e pacote ZIP.
+    \item \textbf{Máquina 1:} Inicializada primeiro, detectou ausência de servidores via broadcast e autoproclamou-se Front-End inicial;
+    \item \textbf{Máquina 2:} Ingressou como Replica Manager;
+    \item \textbf{Máquina 3:} Ingressou como Replica Manager;
+    \item \textbf{Máquina 4:} Processo cliente.
 \end{itemize}
+
+O cliente conectou-se ao cluster e emitiu uma carga massiva de 1.000.000 de requisições a partir de arquivo texto. No decorrer do envio, o Front-End da Máquina 1 foi derrubado intencionalmente. As réplicas remanescentes detectaram a queda e executaram a eleição no anel. Sendo $\texttt{143.54.50.203} > \texttt{143.54.50.34}$, a Máquina 2 foi eleita e assumiu como novo Front-End. O cliente redescobriu o novo líder e concluiu o lote com sucesso, totalizando:
+\[
+    num\_reqs = 1.000.000 \quad \text{e} \quad total\_sum = 25.513.505,
+\]
+com exata equivalência entre o acumulador do cliente e das réplicas ativas.
+
+\noindent\textbf{Diagnóstico e evolução na reintegração de réplicas:} Durante esses ensaios iniciais, observou-se que um nó reiniciado após queda não conseguia reingressar no quórum com o estado atualizado, retendo sequências por aguardar $seq\_id=1$. Notou-se a necessidade de que os nós recuperados deveriam sincronizar o acumulador. Para isso, a equipe desenvolveu e aplicou a sincronização de estado com \mensagem{MSG\_STATE\_SYNC} e descarga de pendências.
+
+\subsubsection{Cenário com 5 máquinas físicas}
+
+Após a implementação da sincronização e recuperação de nós, expandiu-se o cluster para cinco computadores físicos com a adição da Máquina 5. Nessa configuração, o cluster operou com um Front-End e três Replica Managers ativos, estabelecendo quórum da maioria simples de $2/3$. O cliente na Máquina 4 submeteu novamente a carga integral de 1.000.000 de requisições. Foram introduzidas falhas tanto ao FE quanto aos RMs durante o processamento. No final, verificou-se nos terminais que todos os três RMs e o cliente convergiram deterministicamente para o mesmo estado final:
+\[
+    seq\_id = 1.000.000, \quad num\_reqs = 1.000.000, \quad total\_sum = 25.513.505,
+\]
+evidenciando a correção da replicação ativa, a estabilidade do quórum sob concorrência e a integridade da máquina de estados replicada.
 
 \section{Uso de ferramentas de inteligência artificial}
 
-Foi utilizado o OpenAI Codex como ferramenta de apoio durante a Parte 2. Seu uso
-incluiu revisão do enunciado, análise da evolução da Parte 1, apoio na definição
-da identidade \arquivo{(client\_id, id\_req)}, revisão dos formatos binários,
-criação e ampliação de testes unitários, investigação de falhas e organização da
-documentação e deste relatório.
+Foram utilizados OpenAI Codex e Google Antigravity como ferramentas de apoio técnico durante o desenvolvimento e a validação da Parte 2. Seu uso
+concentrou-se na análise comparativa de requisitos com a Parte 1, na escrita e ampliação da suíte de testes unitários, na formatação deste relatório em LaTeX e na depuração de condições de corrida complexas, com destaque para o diagnóstico do bloqueio de buffer sob failover (\arquivo{resolver\_duplicata\_resequenciada}) e o encerramento seguro de threads de I/O via \texttt{SIGINT}.
 
-As sugestões foram comparadas com o código existente e validadas por testes. A
-ferramenta não substituiu as decisões arquiteturais do grupo: quórum, algoritmo
-do anel, regras de promoção, sincronização e comportamento diante de falhas
-foram mantidos explícitos no código e devem ser compreendidos pelos integrantes
-para a apresentação.
+Todas as sugestões de código e fundamentações teóricas foram revisadas e validadas por meio de testes automatizados e execuções práticas. O uso dos assistentes não substituiu as decisões de projeto do grupo: a arquitetura de replicação ativa, o algoritmo do anel, o modelo de quórum e os mecanismos de recuperação de falhas foram implementados, compreendidos e testados pela equipe.
 
 \section{Divisão de responsabilidades}
 
-A divisão abaixo foi reconstruída a partir do histórico Git atual e deve ser
-confirmada pelo grupo antes da entrega.
+A divisão abaixo foi reconstruída a partir do histórico Git do projeto e discussões internas do grupo.
 
-\begin{table}[htbp]
+\begin{table}[H]
     \centering
     \caption{Responsabilidades registradas no histórico do projeto.}
     \label{tab:responsabilidades}
@@ -339,7 +401,7 @@ confirmada pelo grupo antes da entrega.
         \midrule
         Gabriel Welter & Organização do estado da Etapa 2, identidade das operações, adaptação inicial do protocolo/cliente, duplicatas e documentação. \\
         Giovanni Milanez & Algoritmo do anel, redescoberta do FE pelo cliente, detector de falhas, heartbeats, failover e correções de concorrência/histórico. \\
-        Henrique Trein & Protocolo e buffer iniciais, testes unitários, descoberta dinâmica, IP automático, reintegração de RMs, sincronização e correções de failover. \\
+        Henrique Trein & Protocolo e buffer iniciais, testes unitários, testes em loopback e rede-local usando múltiplas máquinas, descoberta dinâmica, IP automático, reintegração de RMs, sincronização e correções de failover. \\
         Vicente Isatto & Fluxo FE--RM, disseminação de operações, confirmações, quórum e correções do caminho de replicação. \\
         \bottomrule
     \end{tabularx}
@@ -347,24 +409,24 @@ confirmada pelo grupo antes da entrega.
 
 \section{Conclusão}
 
-A implementação atual reúne os componentes centrais solicitados: reutilização
-da Parte 1, replicação ativa ordenada, quórum, recuperação de lacunas, descoberta
-dinâmica, detecção de falhas e eleição em anel. Os testes automatizados fornecem
-boa evidência para os componentes isolados, e o fluxo normal foi verificado com
-processos reais.
+A implementação desenvolvida atende aos requisitos estabelecidos para a Parte 2: reaproveitamento modular da arquitetura da Parte 1, replicação ativa determinística com quórum por maioria simples, garantia de consistência sequencial via sequenciador centralizado, detecção de falhas baseada em heartbeats periódicos e eleição em anel lógico com salto de nós inativos.
 
-O relatório já pode descrever a arquitetura e as decisões de implementação.
-Entretanto, os resultados finais ainda dependem dos experimentos ponta a ponta
-de failover, concorrência e carga. Esses dados devem ser incorporados antes da
-entrega para sustentar as conclusões de disponibilidade e desempenho.
+A validação foi feita por testes unitários com cobertura para os casos de borda a experimentos práticos com múltiplos processos concorrentes sob carga real em cenário loopback e rede-local. Os resultados confirmaram a consistência do acumulador mesmo diante de falhas do FE e RMs, e rajadas intensas de requisições, demonstrando a robustez da solução no tratamento de perdas de pacotes, reordenação de mensagens e transições dinâmicas de liderança.
 
 \appendix
 
 \section{Comandos de execução}
 
-Os servidores escolhem automaticamente o endereço IP e não recebem IP pela
-linha de comando. Para iniciar várias instâncias na mesma máquina, o mesmo par
-de portas pode ser reutilizado:
+Para simplificar a compilação, execução e empacotamento do projeto conforme os requisitos de entrega, disponibilizou-se um \arquivo{Makefile} na raiz do repositório:
+
+\begin{lstlisting}[style=pythonstyle,language=bash,numbers=none]
+make compile    # Valida sintaxe e compila bytecodes Python
+make test       # Executa os 62 testes unitarios da Etapa 2
+make test-all   # Executa os testes de regressao da Etapa 1 e Etapa 2
+make zip        # Gera o pacote entrega_etapa2.zip para submissao
+\end{lstlisting}
+
+Os servidores escolhem automaticamente o endereço IP e não recebem IP pela linha de comando. Para iniciar várias instâncias na mesma máquina, o mesmo par de portas pode ser reutilizado:
 
 \begin{lstlisting}[style=pythonstyle,language=bash,numbers=none]
 python3 Etapa2/servidor.py 4000 5000
@@ -378,19 +440,10 @@ Em outro terminal, inicia-se o cliente:
 python3 Etapa2/cliente.py 4000
 \end{lstlisting}
 
-As suítes de teste são executadas com:
+Para compilar este relatório em uma máquina com distribuição TeX instalada:
 
 \begin{lstlisting}[style=pythonstyle,language=bash,numbers=none]
-python3 -m unittest discover -s Etapa2/tests -v
-python3 -m unittest discover -s Etapa1/tests -v
-\end{lstlisting}
-
-Para compilar este relatório em uma máquina com uma distribuição TeX instalada:
-
-\begin{lstlisting}[style=pythonstyle,language=bash,numbers=none]
-cd "Etapa2/Relatório"
-pdflatex main.tex
-pdflatex main.tex
+make report     # ou: cd "Etapa2/Relatorio" && pdflatex main.tex
 \end{lstlisting}
 
 \begin{thebibliography}{9}

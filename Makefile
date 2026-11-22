@@ -1,0 +1,63 @@
+.PHONY: all compile test test-all server client clean report zip help
+
+PYTHON ?= python3
+CLIENT_PORT ?= 4000
+SERVER_PORT ?= 5000
+
+all: compile
+
+compile:
+	@echo "==> Compilando bytecodes Python e verificando sintaxe..."
+	$(PYTHON) -m compileall -q Etapa2 Etapa1
+	@echo "==> Compilacao concluida com sucesso."
+
+test:
+	@echo "==> Executando testes unitarios da Etapa 2..."
+	$(PYTHON) -m unittest discover -s Etapa2/tests -v
+
+test-all:
+	@echo "==> Executando todos os testes (Etapa 1 + Etapa 2)..."
+	$(PYTHON) -m unittest discover -s Etapa2/tests -v
+	$(PYTHON) -m unittest discover -s Etapa1/tests -v
+
+server:
+	@echo "==> Iniciando instancia do Servidor (portas $(CLIENT_PORT) e $(SERVER_PORT))..."
+	$(PYTHON) Etapa2/servidor.py $(CLIENT_PORT) $(SERVER_PORT)
+
+client:
+	@echo "==> Iniciando Cliente interativo (porta $(CLIENT_PORT))..."
+	$(PYTHON) Etapa2/cliente.py $(CLIENT_PORT)
+
+report:
+	@echo "==> Compilando relatorio LaTeX..."
+	@if command -v pdflatex >/dev/null 2>&1; then \
+		cd "Etapa2/Relatório" && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex; \
+		echo "==> Relatorio compilado: Etapa2/Relatório/main.pdf"; \
+	else \
+		echo "AVISO: pdflatex nao encontrado no ambiente. Instale texlive ou compile em ambiente com TeX."; \
+	fi
+
+clean:
+	@echo "==> Limpando arquivos temporarios e caches..."
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	find . -type f -name "*.pyo" -delete 2>/dev/null || true
+	rm -f "Etapa2/Relatório"/*.aux "Etapa2/Relatório"/*.log "Etapa2/Relatório"/*.out "Etapa2/Relatório"/*.toc "Etapa2/Relatório"/*.synctex.gz 2>/dev/null || true
+	rm -f entrega_etapa2.zip
+	@echo "==> Limpeza concluida."
+
+zip: clean
+	@echo "==> Gerando arquivo ZIP para entrega..."
+	zip -r entrega_etapa2.zip Makefile README.md Etapa2 Etapa1 -x "*.git*" "*__pycache__*" "*.pyc"
+	@echo "==> Pacote gerado com sucesso: entrega_etapa2.zip"
+
+help:
+	@echo "Alvos disponiveis no Makefile:"
+	@echo "  make compile   - Compila e valida a sintaxe dos arquivos Python"
+	@echo "  make test      - Executa os 62 testes unitarios da Etapa 2"
+	@echo "  make test-all  - Executa os testes da Etapa 1 e Etapa 2"
+	@echo "  make server    - Inicia uma instancia de servidor (portas 4000 5000)"
+	@echo "  make client    - Inicia o cliente interativo (porta 4000)"
+	@echo "  make report    - Compila o relatorio LaTeX em PDF (requer pdflatex)"
+	@echo "  make clean     - Remove caches __pycache__ e arquivos temporarios"
+	@echo "  make zip       - Gera o pacote ZIP completo para entrega"

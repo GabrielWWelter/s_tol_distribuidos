@@ -159,9 +159,6 @@ class FrontEnd:
                         f"req={id_req}, val={valor}) -> seq_id={seq_id} | "
                         f"Quórum atual: {self.formatar_quorum()}"
                     )
-                if not self.rms_ativos and not op_info["evento_quorum"].is_set():
-                    self._resolver_sem_rms(seq_id, op_info)
-                    conduzir_multicast = False
 
             if log_recebida is not None:
                 print(protocolo.colorir(log_recebida, protocolo.COLOR_FE), flush=True)
@@ -280,15 +277,6 @@ class FrontEnd:
                     pacotes.append(protocolo.pack_order_multicast(s, c_id, r_id, val))
             return pacotes
 
-    def _resolver_sem_rms(self, seq_id, op_info):
-        _, _, valor = op_info["dados_op"]
-        self.num_reqs = (self.num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
-        self.total_sum = (self.total_sum + valor) & 0xFFFFFFFFFFFFFFFF
-        op_info["resultado_final"] = (self.num_reqs, self.total_sum)
-        op_info["evento_quorum"].set()
-        self.pendentes.discard(seq_id)
-        self._podar_historico()
-
     def _verificar_quorum_op(self, seq_id, op_info):
         quorum = self.calcular_quorum()
         if quorum is None:
@@ -397,8 +385,6 @@ class FrontEnd:
                 if op_info is not None and not op_info["evento_quorum"].is_set():
                     if self.rms_ativos:
                         self._verificar_quorum_op(seq_id, op_info)
-                    else:
-                        self._resolver_sem_rms(seq_id, op_info)
             evento, cor = "Falha detectada no", protocolo.COLOR_FAIL
         ip_rm = self.nos_cluster.get(rm_id, (str(rm_id),))[0]
         print(

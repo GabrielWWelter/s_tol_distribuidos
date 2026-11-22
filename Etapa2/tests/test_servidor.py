@@ -169,6 +169,15 @@ class TestServidorDinamico(unittest.TestCase):
             novo_fe.fe.processar_requisicao_cliente(
                 protocolo.pack_req(2002, 1, 40), ("127.0.0.10", 6001), lambda: True
             )
+            # Sem RMs ativos no cluster, o FE nao responde sozinho (sem quorum)
+            self.assertEqual(len(sock_cli.enviados), 0)
+
+            # Apos o RM ingressar e confirmar a operacao, atinge quorum e responde o ACK
+            novo_fe.fe.adicionar_rm(rm2_id, "127.0.0.2", 5107)
+            novo_fe.fe.tratar_rm_ack(protocolo.pack_rm_ack(2, 2002, 1, 2, 50, rm2_id))
+            novo_fe.fe.processar_requisicao_cliente(
+                protocolo.pack_req(2002, 1, 40), ("127.0.0.10", 6001), lambda: True
+            )
             self.assertEqual(len(sock_cli.enviados), 1)
             self.assertEqual(
                 protocolo.unpack_ack(sock_cli.enviados[0][0]), (2002, 1, 2, 50)
