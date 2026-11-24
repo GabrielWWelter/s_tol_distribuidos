@@ -298,6 +298,128 @@ class TestServidorDinamico(unittest.TestCase):
         acks = [p for p, _ in sock_clu.enviados if p[0] == protocolo.MSG_RM_ACK]
         self.assertEqual(len(acks), 2)
 
+    def test_reconexao_cabo_rm_isolado_reverte_split_brain_sem_congelar_lider(self):
+        fe_real = servidor.ServidorReplicado("127.0.0.203", 4120, 5120)
+        rm_ativo = servidor.ServidorReplicado("127.0.0.122", 4121, 5120)
+        rm_isolado = servidor.ServidorReplicado("127.0.0.94", 4122, 5120)
+        try:
+            fe_real.assumir_lideranca_inicial()
+            fe_real.fe.next_seq = 500
+            fe_real.fe.num_reqs = 499
+            fe_real.fe.total_sum = 5000
+            fe_real.fe.adicionar_rm(rm_ativo.node_id, "127.0.0.122", 5120)
+            fe_real.nos_cluster[rm_ativo.node_id] = ("127.0.0.122", 5120)
+            fe_real.detector.registrar(rm_ativo.node_id)
+
+            rm_ativo.nos_cluster[fe_real.node_id] = ("127.0.0.203", 5120)
+            rm_ativo.leader_id = fe_real.node_id
+            rm_ativo.detector.registrar(fe_real.node_id)
+            rm_ativo.rm.sincronizar(500, 499, 5000)
+
+            rm_isolado.rm.sincronizar(100, 99, 1000)
+            rm_isolado.assumir_lideranca()
+            self.assertTrue(rm_isolado.is_leader())
+
+            sock_fe = SocketCapturador()
+            sock_isolado = SocketCapturador()
+            fe_real.sock_cluster.close()
+            fe_real.sock_cluster = sock_fe
+            fe_real.fe.sock_cluster = sock_fe
+            rm_isolado.sock_cluster.close()
+            rm_isolado.sock_cluster = sock_isolado
+            rm_isolado.fe.sock_cluster = sock_isolado
+            rm_isolado.rm.sock_cluster = sock_isolado
+
+            topo_falsa = protocolo.pack_topology(
+                rm_isolado.node_id, ["127.0.0.94", "127.0.0.122", "127.0.0.203"]
+            )
+            fe_real.ultimo_seq_no[rm_isolado.node_id] = 99
+            rm_ativo.ultimo_seq_no[rm_isolado.node_id] = 99
+            fe_real.tratar_topologia(topo_falsa, ("127.0.0.94", 5120))
+            rm_ativo.tratar_topologia(topo_falsa, ("127.0.0.94", 5120))
+
+            self.assertTrue(fe_real.is_leader())
+            self.assertEqual(rm_ativo.leader_id, fe_real.node_id)
+
+            hb_fe_real = protocolo.pack_heartbeat(fe_real.node_id, 499)
+            rm_isolado.tratar_heartbeat(hb_fe_real, ("127.0.0.203", 5120))
+
+            self.assertFalse(rm_isolado.is_leader())
+            self.assertEqual(rm_isolado.leader_id, fe_real.node_id)
+            topos_indevidas = [
+                p for p, _ in sock_isolado.enviados if p[0] == protocolo.MSG_TOPOLOGY
+            ]
+            self.assertEqual(topos_indevidas, [])
+            joins = [
+                (p, d) for p, d in sock_isolado.enviados if p[0] == protocolo.MSG_RM_JOIN
+            ]
+            self.assertEqual(len(joins), 1)
+
+            fe_real.tratar_rm_join(joins[0][0], ("127.0.0.94", 5120))
+            self.assertIn(rm_isolado.node_id, fe_real.fe.rms_ativos)
+            syncs = [
+                p for p, d in sock_fe.enviados
+                if p[0] == protocolo.MSG_STATE_SYNC and d[0] == "127.0.0.94"
+            ]
+            self.assertEqual(len(syncs), 1)
+            n_seq, n_reqs, t_sum = protocolo.unpack_state_sync(syncs[0])
+            rm_isolado.rm.sincronizar(n_seq, n_reqs, t_sum, fe_real.node_id)
+            self.assertEqual(rm_isolado.rm.buffer.expected_seq, 500)
+            self.assertEqual(rm_isolado.rm.buffer.total_sum, 5000)
+        finally:
+            fe_real.fechar_sockets()
+            rm_ativo.fechar_sockets()
+            rm_isolado.fechar_sockets()
+
+    def test_rm_atrasado_reintegra_atomicamente_via_heartbeat_sem_loop_infinito(self):
+        fe_srv = servidor.ServidorReplicado("127.0.0.203", 4123, 5123)
+        try:
+            fe_srv.assumir_lideranca_inicial()
+            fe_srv.fe.next_seq = 500
+            fe_srv.fe.num_reqs = 499
+            fe_srv.fe.total_sum = 9999
+
+            sock_fe = SocketCapturador()
+            fe_srv.sock_cluster.close()
+            fe_srv.sock_cluster = sock_fe
+            fe_srv.fe.sock_cluster = sock_fe
+
+            rm_id = ip_para_id("127.0.0.94")
+            hb_atrasado = protocolo.pack_heartbeat(fe_srv.node_id, 100)
+            fe_srv.tratar_heartbeat(hb_atrasado, ("127.0.0.94", 5123))
+
+            self.assertIn(rm_id, fe_srv.fe.rms_ativos)
+            syncs = [p for p, _ in sock_fe.enviados if p[0] == protocolo.MSG_STATE_SYNC]
+            self.assertEqual(len(syncs), 1)
+            self.assertEqual(protocolo.unpack_state_sync(syncs[0]), (500, 499, 9999))
+        finally:
+            fe_srv.fechar_sockets()
+
+    def test_antigo_fe_isolado_cede_lideranca_ao_reconectar_com_cluster_avancado(self):
+        antigo_fe = servidor.ServidorReplicado("127.0.0.203", 4124, 5124)
+        novo_fe_id = ip_para_id("127.0.0.122")
+        try:
+            antigo_fe.assumir_lideranca_inicial()
+            antigo_fe.fe.next_seq = 101
+            antigo_fe.fe.num_reqs = 100
+            antigo_fe.fe.total_sum = 2500
+
+            sock_antigo = SocketCapturador()
+            antigo_fe.sock_cluster.close()
+            antigo_fe.sock_cluster = sock_antigo
+            antigo_fe.fe.sock_cluster = sock_antigo
+
+            hb_novo_fe = protocolo.pack_heartbeat(novo_fe_id, 250)
+            antigo_fe.tratar_heartbeat(hb_novo_fe, ("127.0.0.122", 5124))
+
+            self.assertFalse(antigo_fe.is_leader())
+            self.assertEqual(antigo_fe.leader_id, novo_fe_id)
+            self.assertEqual(antigo_fe.rm.buffer.expected_seq, 101)
+            joins = [p for p, _ in sock_antigo.enviados if p[0] == protocolo.MSG_RM_JOIN]
+            self.assertEqual(len(joins), 1)
+        finally:
+            antigo_fe.fechar_sockets()
+
 
 if __name__ == "__main__":
     unittest.main()

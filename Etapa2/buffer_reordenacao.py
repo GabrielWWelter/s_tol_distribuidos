@@ -72,6 +72,13 @@ class BufferReordenacao:
         self.num_reqs = num_reqs
         self.total_sum = total_sum
 
+        for s in list(self.historico.keys()):
+            if s >= self.expected_seq:
+                old_op, _ = self.historico.pop(s)
+                old_key = (old_op[0], old_op[1])
+                if self.seq_por_operacao.get(old_key) == s:
+                    del self.seq_por_operacao[old_key]
+
         for s in list(self.pendencias.keys()):
             if s < self.expected_seq:
                 c_id, r_id, _ = self.pendencias.pop(s)

@@ -79,6 +79,15 @@ class FrontEnd:
             self.ultimo_contato_rm = {no_id: agora for no_id in self.rms_ativos}
             self.aguardando_desde = {no_id: None for no_id in self.rms_ativos}
 
+    def desativar(self):
+        with self.lock_fe:
+            self.rms_ativos.clear()
+            self.ultimo_contato_rm.clear()
+            self.aguardando_desde.clear()
+            self.pendentes.clear()
+            for op_info in self.operacoes.values():
+                op_info["evento_quorum"].set()
+
     def responder_descoberta(self, addr):
         """Responde ao cliente pelo socket unicast ligado ao IP do FE."""
         try:
@@ -212,7 +221,7 @@ class FrontEnd:
             return
 
         with self.lock_fe:
-            if rm_id == self.node_id:
+            if rm_id == self.node_id or rm_id not in self.nos_cluster:
                 return
 
             self.ultimo_contato_rm[rm_id] = time.monotonic()
@@ -247,35 +256,53 @@ class FrontEnd:
             if self.op_to_seq.get(old_key) == oldest_seq:
                 del self.op_to_seq[old_key]
 
+    def _estado_sincronizacao_interno(self):
+        if self.pendentes:
+            sync_seq = min(self.pendentes)
+            if sync_seq == 1:
+                sync_num_reqs = 0
+                sync_total_sum = 0
+            else:
+                prev_op = self.operacoes.get(sync_seq - 1)
+                if prev_op is not None and prev_op["resultado_final"] is not None:
+                    sync_num_reqs, sync_total_sum = prev_op["resultado_final"]
+                else:
+                    sync_num_reqs, sync_total_sum = self.num_reqs, self.total_sum
+        else:
+            sync_seq = self.next_seq
+            sync_num_reqs = self.num_reqs
+            sync_total_sum = self.total_sum
+        return sync_seq, sync_num_reqs, sync_total_sum
+
+    def _pacotes_pendentes_interno(self):
+        pacotes = []
+        for s in sorted(self.pendentes):
+            op_info = self.operacoes.get(s)
+            if op_info is not None and not op_info["evento_quorum"].is_set():
+                c_id, r_id, val = op_info["dados_op"]
+                pacotes.append(protocolo.pack_order_multicast(s, c_id, r_id, val))
+        return pacotes
+
     def obter_estado_sincronizacao(self):
         with self.lock_fe:
-            if self.pendentes:
-                sync_seq = min(self.pendentes)
-                if sync_seq == 1:
-                    sync_num_reqs = 0
-                    sync_total_sum = 0
-                else:
-                    prev_seq = sync_seq - 1
-                    prev_op = self.operacoes.get(prev_seq)
-                    if prev_op is not None and prev_op["resultado_final"] is not None:
-                        sync_num_reqs, sync_total_sum = prev_op["resultado_final"]
-                    else:
-                        sync_num_reqs, sync_total_sum = self.num_reqs, self.total_sum
-            else:
-                sync_seq = self.next_seq
-                sync_num_reqs = self.num_reqs
-                sync_total_sum = self.total_sum
-            return sync_seq, sync_num_reqs, sync_total_sum
+            return self._estado_sincronizacao_interno()
+
+    def obter_ultimo_seq_confirmado(self):
+        with self.lock_fe:
+            sync_seq, _, _ = self._estado_sincronizacao_interno()
+            return sync_seq - 1
 
     def obter_pacotes_pendentes(self):
         with self.lock_fe:
-            pacotes = []
-            for s in sorted(self.pendentes):
-                op_info = self.operacoes.get(s)
-                if op_info is not None and not op_info["evento_quorum"].is_set():
-                    c_id, r_id, val = op_info["dados_op"]
-                    pacotes.append(protocolo.pack_order_multicast(s, c_id, r_id, val))
-            return pacotes
+            return self._pacotes_pendentes_interno()
+
+    def reintegrar_rm(self, rm_id, ip_rm, port_cluster):
+        with self.lock_fe:
+            self.nos_cluster[rm_id] = (ip_rm, port_cluster)
+            alterou = self._marcar_rm(rm_id, True)
+            estado_sync = self._estado_sincronizacao_interno()
+            pendentes = self._pacotes_pendentes_interno()
+            return alterou, estado_sync, pendentes
 
     def _verificar_quorum_op(self, seq_id, op_info):
         quorum = self.calcular_quorum()
@@ -315,6 +342,7 @@ class FrontEnd:
             return
 
         pacotes_reenvio = []
+        pacote_sync = None
         with self.lock_fe:
             if rm_id == self.node_id:
                 return
@@ -322,14 +350,27 @@ class FrontEnd:
             self.aguardando_desde[rm_id] = None
             destino = self.nos_cluster.get(rm_id, addr_remetente)
 
-            for s in range(expected_seq, self.next_seq):
-                op_info = self.operacoes.get(s)
-                if op_info is not None:
-                    c_id, r_id, val = op_info["dados_op"]
-                    pacotes_reenvio.append(
-                        protocolo.pack_order_multicast(s, c_id, r_id, val)
-                    )
+            if expected_seq < self.next_seq:
+                if (self.next_seq - expected_seq) > 64 or expected_seq not in self.operacoes:
+                    sync_seq, sync_nr, sync_ts = self._estado_sincronizacao_interno()
+                    pacote_sync = protocolo.pack_state_sync(sync_seq, sync_nr, sync_ts)
+                    inicio = sync_seq
+                else:
+                    inicio = expected_seq
 
+                for s in range(inicio, self.next_seq):
+                    op_info = self.operacoes.get(s)
+                    if op_info is not None:
+                        c_id, r_id, val = op_info["dados_op"]
+                        pacotes_reenvio.append(
+                            protocolo.pack_order_multicast(s, c_id, r_id, val)
+                        )
+
+        if pacote_sync is not None:
+            try:
+                self.sock_cluster.sendto(pacote_sync, destino)
+            except OSError:
+                pass
         for pct in pacotes_reenvio:
             try:
                 self.sock_cluster.sendto(pct, destino)

@@ -48,13 +48,13 @@ clean:
 
 zip: clean
 	@echo "==> Gerando arquivo ZIP para entrega..."
-	zip -r entrega_etapa2.zip Makefile README.md Etapa2 Etapa1 -x "*.git*" "*__pycache__*" "*.pyc"
+	zip -r entrega_etapa2.zip Makefile README.md Etapa2 Etapa1 -x "*.git*" "*__pycache__*" "*.pyc" "Etapa2/erro.txt"
 	@echo "==> Pacote gerado com sucesso: entrega_etapa2.zip"
 
 help:
 	@echo "Alvos disponiveis no Makefile:"
 	@echo "  make compile   - Compila e valida a sintaxe dos arquivos Python"
-	@echo "  make test      - Executa os 62 testes unitarios da Etapa 2"
+	@echo "  make test      - Executa os 65 testes unitarios da Etapa 2"
 	@echo "  make test-all  - Executa os testes da Etapa 1 e Etapa 2"
 	@echo "  make server    - Inicia uma instancia de servidor (portas 4000 5000)"
 	@echo "  make client    - Inicia o cliente interativo (porta 4000)"

@@ -36,7 +36,7 @@ make clean
 O projeto conta com suítes abrangentes de testes unitários automatizados com `unittest`:
 
 ```bash
-# Executa os 62 testes unitários da Etapa 2
+# Executa os 65 testes unitários da Etapa 2
 make test
 
 # Executa todos os testes (Etapa 1 e Etapa 2)
@@ -121,5 +121,5 @@ make zip
     ├── detector_falhas.py  # Monitor de heartbeats e detecção de inatividade
     ├── protocolo.py        # Serialização binária das mensagens de controle
     ├── Relatório/          # Relatório técnico em LaTeX (main.tex)
-    └── tests/              # 62 testes unitários automatizados
+    └── tests/              # 65 testes unitários automatizados
 ```

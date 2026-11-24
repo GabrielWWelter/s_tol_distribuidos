@@ -5,6 +5,10 @@ def ip_para_id(ip):
     return int(ipaddress.IPv4Address(ip))
 
 
+def id_para_ip(no_id):
+    return str(ipaddress.IPv4Address(no_id))
+
+
 def sucessor(ids, meu_id, inativos=()):
     anel = sorted(ids)
     posicao = anel.index(meu_id)

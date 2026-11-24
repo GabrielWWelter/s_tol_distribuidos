@@ -25,6 +25,13 @@ class ReplicaManager:
 
     def sincronizar(self, next_seq, num_reqs, total_sum, leader_id=None):
         with self.lock_rm:
+            if (
+                self.buffer.expected_seq == next_seq
+                and self.buffer.num_reqs == num_reqs
+                and self.buffer.total_sum == total_sum
+                and next_seq not in self.buffer.pendencias
+            ):
+                return
             aplicadas = self.buffer.sincronizar_estado(next_seq, num_reqs, total_sum)
         print(
             protocolo.colorir(
