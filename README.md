@@ -10,7 +10,7 @@ A **Parte 2** estende o serviço desenvolvido na Parte 1, implementando replica�
 
 - **Sistema Operacional:** Linux (testado em Ubuntu 22.04 LTS, x86_64);
 - **Interpretador:** Python 3.10 ou superior (`python3`);
-- **Utilitários:** `make`, `zip`.
+- **Utilitários:** `make`; para gerar o pacote de entrega, também `zip` e `pdflatex` (TeX Live).
 
 ---
 
@@ -36,10 +36,11 @@ make clean
 O projeto conta com suítes abrangentes de testes unitários automatizados com `unittest`:
 
 ```bash
-# Executa os 65 testes unitários da Etapa 2
+# Executa os 68 testes unitários da Etapa 2
 make test
 
-# Executa todos os testes (Etapa 1 e Etapa 2)
+# Executa os testes da Etapa 2 e, se a pasta Etapa1 existir, também os dela
+# (a Etapa1 não faz parte do pacote de entrega)
 make test-all
 ```
 
@@ -72,7 +73,7 @@ Os servidores detectam automaticamente seus endereços IP e portas, não sendo n
   ```bash
   python3 Etapa2/cliente.py 4000
   ```
-  O cliente executará a descoberta via broadcast, conectará ao Front-End ativo e exibirá o prompt de leitura.
+  O cliente executará a descoberta via broadcast, exibirá o endereço do Front-End ativo e passará a ler números da entrada padrão (sem exibir um prompt).
 
 #### Passo 3: Envio de Operações
 No terminal do cliente, digite um número inteiro e pressione `Enter`:
@@ -81,8 +82,9 @@ No terminal do cliente, digite um número inteiro e pressione `Enter`:
 ```
 O cliente emitirá a requisição e exibirá a resposta com o total consolidado:
 ```
-server 127.0.0.1 id_req 1 value 10 num_reqs 1 total_sum 10
+2026-11-25 20:23:33 server 192.168.0.10 id_req 1 value 10 num_reqs 1 total_sum 10
 ```
+A data, a hora e o endereço do servidor variam conforme a execução.
 Digitando `20`, o acumulador será atualizado para `total_sum 30`.
 
 Também é possível enviar um lote de valores via redirecionamento de entrada:
@@ -98,6 +100,8 @@ Para gerar o arquivo compactado `entrega_etapa2.zip` pronto para submissão:
 make zip
 ```
 
+O comando recompila o relatório antes de empacotar; se a compilação falhar, o ZIP não é gerado. O pacote contém o `Makefile`, o `README.md` e a pasta `Etapa2/` (sem os arquivos auxiliares do LaTeX).
+
 ---
 
 ## 6. Estrutura de Diretórios
@@ -106,11 +110,6 @@ make zip
 .
 ├── Makefile                # Script automatizado de compilação, testes e execução
 ├── README.md               # Este tutorial de compilação e execução
-├── Etapa1/                 # Código-fonte e testes da Parte 1
-│   ├── cliente.py
-│   ├── servidor.py
-│   ├── protocolo.py
-│   └── tests/
 └── Etapa2/                 # Código-fonte e testes da Parte 2
     ├── cliente.py          # Cliente Stop-and-Wait com redescoberta sob failover
     ├── servidor.py         # Orquestrador dinâmico de papéis (FE / RM)
@@ -121,5 +120,5 @@ make zip
     ├── detector_falhas.py  # Monitor de heartbeats e detecção de inatividade
     ├── protocolo.py        # Serialização binária das mensagens de controle
     ├── Relatório/          # Relatório técnico em LaTeX (main.tex)
-    └── tests/              # 65 testes unitários automatizados
+    └── tests/              # 68 testes unitários automatizados
 ```

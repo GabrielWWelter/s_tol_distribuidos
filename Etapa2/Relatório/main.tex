@@ -273,7 +273,7 @@ Ao receber, então, uma mensagem de eleição, o nó compara o candidato recebid
 Por fim, quando a mensagem retorna com a própria identidade do nó remetente, este torna-se ganhador, assume as funções de Front-End e sequenciador global e envia \mensagem{MSG\_ELECTED}, que dá uma volta no anel; cada nó registra o novo líder, deixa de ser participante e repassa a mensagem.
 
 
-O novo FE assume com base no seu estado local (próxima sequência, quantidade de requisições e acumulador). Todas as etapas do algoritmo (detecção da queda, disparo da eleição, repasses e proclamação do novo líder) emitem mensagens padronizadas e destacadas no terminal.
+O novo FE assume o sequenciador a partir da maior sequência conhecida entre os nós ativos. Se o seu estado local estiver atrasado, ele não o usa para sincronizar outros RMs até a primeira confirmação dos RMs em dia, da qual obtém os totais. Todas as etapas do algoritmo (detecção da queda, disparo da eleição, repasses e proclamação do novo líder) emitem mensagens padronizadas e destacadas no terminal.
 
 Após a eleição, o cliente usa stop-and-wait e mantém a mesma operação até receber o ACK. Após
 sucessivas tentativas sem resposta, ele executa novamente a descoberta, atualiza
@@ -306,7 +306,7 @@ fora das regiões críticas para não bloquear outras requisições.
 
 \section{Testes e resultados experimentais}
 
-A validação do sistema compreendeu testes unitários automatizados, testes manuais de tolerância a falhas em ambiente local (\textit{loopback}) e experimentos distribuídos com até cinco computadores na rede local de laboratórios do INF-UFRGS. Com o framework \arquivo{unittest}, foram executados os 65 testes da Parte 2 e os 8 testes de regressão da Parte 1, obtendo-se 100\% de aprovação.
+A validação do sistema compreendeu testes unitários automatizados, testes manuais de tolerância a falhas em ambiente local (\textit{loopback}) e experimentos distribuídos com até cinco computadores na rede local de laboratórios do INF-UFRGS. Com o framework \arquivo{unittest}, foram executados os 68 testes da Parte 2 e, no repositório do projeto, os 8 testes de regressão da Parte 1 (que não integram o pacote de entrega), obtendo-se 100\% de aprovação.
 
 Nos testes locais, instanciaram-se três processos de servidores na mesma máquina, reutilizando o mesmo par de portas (\texttt{4000} para clientes e \texttt{5000} para o cluster), com alocação automática de endereços de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2} e \texttt{127.0.0.3}), e um cliente na porta \texttt{4000}. Foram avaliados três cenários: queda do Front-End e eleição em anel, redescoberta e continuidade das requisições pelo cliente, e queda de um Replica Manager.
 
@@ -380,9 +380,9 @@ Para simplificar a compilação, execução e empacotamento do projeto conforme 
 
 \begin{lstlisting}[style=pythonstyle,language=bash,numbers=none]
 make compile    # Valida sintaxe e compila bytecodes Python
-make test       # Executa os 65 testes unitarios da Etapa 2
-make test-all   # Executa os testes de regressao da Etapa 1 e Etapa 2
-make zip        # Gera o pacote entrega_etapa2.zip para submissao
+make test       # Executa os 68 testes unitarios da Etapa 2
+make test-all   # Inclui os testes da Etapa 1, se a pasta existir
+make zip        # Compila o relatorio e gera entrega_etapa2.zip
 \end{lstlisting}
 
 Os servidores escolhem automaticamente o endereço IP e não recebem IP pela linha de comando. Para iniciar várias instâncias na mesma máquina, o mesmo par de portas pode ser reutilizado:

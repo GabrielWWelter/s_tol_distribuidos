@@ -8,7 +8,7 @@ all: compile
 
 compile:
 	@echo "==> Compilando bytecodes Python e verificando sintaxe..."
-	$(PYTHON) -m compileall -q Etapa2 Etapa1
+	$(PYTHON) -m compileall -q $(wildcard Etapa2 Etapa1)
 	@echo "==> Compilacao concluida com sucesso."
 
 test:
@@ -18,7 +18,7 @@ test:
 test-all:
 	@echo "==> Executando todos os testes (Etapa 1 + Etapa 2)..."
 	$(PYTHON) -m unittest discover -s Etapa2/tests -v
-	$(PYTHON) -m unittest discover -s Etapa1/tests -v
+	@if [ -d Etapa1/tests ]; then $(PYTHON) -m unittest discover -s Etapa1/tests -v; fi
 
 server:
 	@echo "==> Iniciando instancia do Servidor (portas $(CLIENT_PORT) e $(SERVER_PORT))..."
@@ -30,12 +30,9 @@ client:
 
 report:
 	@echo "==> Compilando relatorio LaTeX..."
-	@if command -v pdflatex >/dev/null 2>&1; then \
-		cd "Etapa2/Relatório" && pdflatex -interaction=nonstopmode main.tex && pdflatex -interaction=nonstopmode main.tex; \
-		echo "==> Relatorio compilado: Etapa2/Relatório/main.pdf"; \
-	else \
-		echo "AVISO: pdflatex nao encontrado no ambiente. Instale texlive ou compile em ambiente com TeX."; \
-	fi
+	@command -v pdflatex >/dev/null 2>&1 || { echo "ERRO: pdflatex nao encontrado. Instale o TeX Live."; exit 1; }
+	@cd "Etapa2/Relatório" && pdflatex -interaction=nonstopmode -halt-on-error main.tex && pdflatex -interaction=nonstopmode -halt-on-error main.tex
+	@echo "==> Relatorio compilado: Etapa2/Relatório/main.pdf"
 
 clean:
 	@echo "==> Limpando arquivos temporarios e caches..."
@@ -46,18 +43,19 @@ clean:
 	rm -f entrega_etapa2.zip
 	@echo "==> Limpeza concluida."
 
-zip: clean
+# o relatorio e recompilado antes; se falhar, o pacote nao e gerado
+zip: clean report
 	@echo "==> Gerando arquivo ZIP para entrega..."
-	zip -r entrega_etapa2.zip Makefile README.md Etapa2 Etapa1 -x "*.git*" "*__pycache__*" "*.pyc" "Etapa2/erro.txt"
+	zip -r entrega_etapa2.zip Makefile README.md Etapa2 -x "*.git*" "*__pycache__*" "*.pyc" "Etapa2/erro.txt" "*.aux" "*.log" "*.out" "*.toc" "*.fls" "*.fdb_latexmk" "*.synctex.gz"
 	@echo "==> Pacote gerado com sucesso: entrega_etapa2.zip"
 
 help:
 	@echo "Alvos disponiveis no Makefile:"
 	@echo "  make compile   - Compila e valida a sintaxe dos arquivos Python"
-	@echo "  make test      - Executa os 65 testes unitarios da Etapa 2"
-	@echo "  make test-all  - Executa os testes da Etapa 1 e Etapa 2"
+	@echo "  make test      - Executa os 68 testes unitarios da Etapa 2"
+	@echo "  make test-all  - Executa os testes da Etapa 2 (e da Etapa 1, se a pasta existir)"
 	@echo "  make server    - Inicia uma instancia de servidor (portas 4000 5000)"
 	@echo "  make client    - Inicia o cliente interativo (porta 4000)"
 	@echo "  make report    - Compila o relatorio LaTeX em PDF (requer pdflatex)"
 	@echo "  make clean     - Remove caches __pycache__ e arquivos temporarios"
-	@echo "  make zip       - Gera o pacote ZIP completo para entrega"
+	@echo "  make zip       - Gera o relatorio e o pacote ZIP de entrega (requer pdflatex)"
