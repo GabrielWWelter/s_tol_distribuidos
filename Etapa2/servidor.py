@@ -105,6 +105,22 @@ class ServidorReplicado:
         self.sock_cluster_bcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.sock_cluster_bcast.bind(("", self.port_cluster))
 
+        # IP multicast: entra no grupo pela interface de rede e pelo loopback
+        grupo = socket.inet_aton(protocolo.GRUPO_MULTICAST)
+        for interface in {obter_ip_interface(), "127.0.0.1"}:
+            try:
+                self.sock_cluster_bcast.setsockopt(
+                    socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, grupo + socket.inet_aton(interface)
+                )
+            except OSError:
+                pass
+        try:
+            self.sock_cluster.setsockopt(
+                socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.ip_maq)
+            )
+        except OSError:
+            pass
+
         self.fe = FrontEnd(
             self.ip_maq,
             self.node_id,
@@ -208,6 +224,12 @@ class ServidorReplicado:
             tipo = dados[0]
             if tipo == protocolo.MSG_SERVER_DISCOVERY:
                 self.tratar_server_discovery(dados, addr)
+            elif tipo == protocolo.MSG_ORDER_MULTICAST and not self.is_leader():
+                # o grupo é compartilhado: só vale a ordem vinda do líder atual
+                with self.lock_nos:
+                    lider = self.nos_cluster.get(self.leader_id)
+                if lider is not None and lider[0] == addr[0]:
+                    self.rm.tratar_order_multicast(dados, addr, self.leader_id)
 
     def _enviar_descoberta_cluster(self):
         pct = protocolo.pack_server_discovery(self.node_id)
@@ -351,9 +373,10 @@ class ServidorReplicado:
             self.nos_cluster[rm_id] = (rm_ip, rm_port)
         self.detector.registrar(rm_id)
 
-        alterou, (sync_seq, num_reqs, total_sum), pendentes = self.fe.reintegrar_rm(
-            rm_id, rm_ip, rm_port
-        )
+        alterou, estado, pendentes = self.fe.reintegrar_rm(rm_id, rm_ip, rm_port)
+        if estado is None:
+            return
+        sync_seq, num_reqs, total_sum = estado
         pct_sync = protocolo.pack_state_sync(sync_seq, num_reqs, total_sum)
         try:
             self.sock_cluster.sendto(pct_sync, (rm_ip, rm_port))
@@ -572,6 +595,7 @@ class ServidorReplicado:
                         rms_em_dia,
                         buffer.num_reqs,
                         buffer.total_sum,
+                        atrasado=maior_seq > buffer.expected_seq,
                     )
                 self.leader_id = self.node_id
                 self.em_eleicao = False
@@ -622,10 +646,11 @@ class ServidorReplicado:
             if mudou:
                 self.log(f"Novo líder: FE={self.ip(lider_id)}", protocolo.COLOR_LEADER)
         if rebaixou_lider:
+            confiavel = self.fe.seq_sem_estado is None
             sync_seq, sync_nr, sync_ts = self.fe.obter_estado_sincronizacao()
             self.fe.desativar()
             with self.rm.lock_rm:
-                if sync_seq > self.rm.buffer.expected_seq:
+                if confiavel and sync_seq > self.rm.buffer.expected_seq:
                     self.rm.buffer.sincronizar_estado(sync_seq, sync_nr, sync_ts)
             self.enviar_a_todos(protocolo.pack_coordinator(lider_id))
             self._enviar_join_ao_lider(lider_id)

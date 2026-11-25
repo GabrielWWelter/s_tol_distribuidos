@@ -28,6 +28,8 @@ class FrontEnd:
         self.op_to_seq = {}  # (id_cliente, id_req) -> seq_id
         self.operacoes = {}  # seq_id -> registro de controle e quórum
         self.pendentes = set()  # seq_id ainda sem quórum atingido
+        # FE eleito atrasado: totais locais não confiáveis até este seq ser confirmado
+        self.seq_sem_estado = None
 
         # O nó atuando como FE não integra o conjunto de RMs ativos
         self.rms_ativos = {no_id for no_id in self.nos_cluster if no_id != leader_id}
@@ -50,9 +52,10 @@ class FrontEnd:
         with self.lock_fe:
             return self.next_seq
 
-    def ativar(self, seq_inicial, historico, rms_ativos, num_reqs_base=0, total_sum_base=0):
+    def ativar(self, seq_inicial, historico, rms_ativos, num_reqs_base=0, total_sum_base=0, atrasado=False):
         """Prepara o FE quando este nó vence uma eleição de líder."""
         with self.lock_fe:
+            self.seq_sem_estado = seq_inicial if atrasado else None
             self.next_seq = seq_inicial
             self.op_to_seq.clear()
             self.operacoes.clear()
@@ -102,8 +105,9 @@ class FrontEnd:
         except OSError:
             pass
 
-    def multicast_rms(self, pacote):
-        """Dissemina a operação via multicast para todos os RMs ativos."""
+    def multicast_rms(self, pacote, reenvio=False):
+        """Dissemina a operação via IP multicast; os reenvios vão por unicast a
+        cada RM ativo, o que cobre redes que bloqueiam multicast."""
         agora = time.monotonic()
         with self.lock_fe:
             destinos = []
@@ -113,6 +117,13 @@ class FrontEnd:
                     destinos.append(addr_rm)
                     if self.aguardando_desde.get(rm_id) is None:
                         self.aguardando_desde[rm_id] = agora
+
+        if destinos and not reenvio:
+            try:
+                self.sock_cluster.sendto(pacote, (protocolo.GRUPO_MULTICAST, destinos[0][1]))
+                return
+            except OSError:
+                pass
 
         for addr in destinos:
             try:
@@ -188,11 +199,11 @@ class FrontEnd:
 
                 tentativas = 0
                 try:
-                    while not op_info["evento_quorum"].wait(timeout=0.005):
+                    while not op_info["evento_quorum"].wait(timeout=0.010):
                         if not check_lider():
                             return
                         tentativas += 1
-                        self.multicast_rms(pacote_mc)
+                        self.multicast_rms(pacote_mc, reenvio=True)
                         if tentativas >= 200:
                             return
                 finally:
@@ -299,6 +310,8 @@ class FrontEnd:
     def reintegrar_rm(self, rm_id, ip_rm, port_cluster):
         with self.lock_fe:
             self.nos_cluster[rm_id] = (ip_rm, port_cluster)
+            if self.seq_sem_estado is not None:
+                return False, None, []  # o RM atrasado espera a 1ª confirmação
             alterou = self._marcar_rm(rm_id, True)
             estado_sync = self._estado_sincronizacao_interno()
             pendentes = self._pacotes_pendentes_interno()
@@ -318,6 +331,8 @@ class FrontEnd:
                 op_info["votos_concordantes"].clear()
                 if chave_res[0] > self.num_reqs:
                     self.num_reqs, self.total_sum = chave_res
+                if seq_id == self.seq_sem_estado:
+                    self.seq_sem_estado = None  # totais agora vêm dos RMs em dia
                 self._podar_historico()
 
                 for rm_id in votos_divergentes:
@@ -352,6 +367,8 @@ class FrontEnd:
 
             if expected_seq < self.next_seq:
                 if (self.next_seq - expected_seq) > 64 or expected_seq not in self.operacoes:
+                    if self.seq_sem_estado is not None:
+                        return  # sem totais confiáveis ainda: o RM pede de novo depois
                     sync_seq, sync_nr, sync_ts = self._estado_sincronizacao_interno()
                     pacote_sync = protocolo.pack_state_sync(sync_seq, sync_nr, sync_ts)
                     inicio = sync_seq

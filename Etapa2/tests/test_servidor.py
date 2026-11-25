@@ -229,6 +229,55 @@ class TestServidorDinamico(unittest.TestCase):
         seq_p, c_id, r_id, val = protocolo.unpack_order_multicast(pacotes[0])
         self.assertEqual((seq_p, c_id, r_id, val), (2, 10, 2, 30))
 
+    def test_fe_eleito_atrasado_nao_envia_estado_errado(self):
+        novo_fe = servidor.ServidorReplicado("127.0.0.3", 4120, 5120)
+        try:
+            antigo_id = ip_para_id("127.0.0.4")
+            b_id = ip_para_id("127.0.0.2")
+            c_id = ip_para_id("127.0.0.1")
+            for no_id, ip in ((antigo_id, "127.0.0.4"), (b_id, "127.0.0.2"), (c_id, "127.0.0.1")):
+                novo_fe.nos_cluster[no_id] = (ip, 5120)
+            novo_fe.leader_id = antigo_id
+            # A (novo FE) e C aplicaram só a op 1 (10); B já aplicou a op 2 (90)
+            novo_fe.rm.buffer.processar(1, 900, 1, 10)
+            novo_fe.detector.registrar(b_id)
+            novo_fe.detector.registrar(c_id)
+            novo_fe.ultimo_seq_no[b_id] = 2
+            novo_fe.ultimo_seq_no[c_id] = 1
+
+            novo_fe.assumir_lideranca()
+            sock = SocketCapturador()
+            novo_fe.sock_cluster.close()
+            novo_fe.sock_cluster = sock
+            novo_fe.fe.sock_cluster = sock
+            self.assertEqual(novo_fe.fe.next_seq, 3)
+            self.assertEqual(novo_fe.fe.rms_ativos, {b_id})
+
+            # C tenta reintegrar antes da 1ª confirmação: nada de STATE_SYNC (1, 10)
+            novo_fe._reintegrar_rm(c_id, "127.0.0.1", 5120, forcar_sync=True)
+            syncs = [p for p, _ in sock.enviados if p[0] == protocolo.MSG_STATE_SYNC]
+            self.assertEqual(syncs, [])
+            self.assertNotIn(c_id, novo_fe.fe.rms_ativos)
+
+            # B confirma a op 3 (valor 5): totais certos chegam ao FE
+            with novo_fe.fe.lock_fe:
+                novo_fe.fe.operacoes[3] = {
+                    "dados_op": (901, 1, 5), "rms_que_votaram": set(),
+                    "votos_concordantes": {}, "resultado_final": None,
+                    "evento_quorum": threading.Event(), "em_andamento": False,
+                }
+                novo_fe.fe.op_to_seq[(901, 1)] = 3
+                novo_fe.fe.pendentes.add(3)
+                novo_fe.fe.next_seq = 4
+            novo_fe.fe.tratar_rm_ack(protocolo.pack_rm_ack(3, 901, 1, 3, 105, b_id))
+            self.assertIsNone(novo_fe.fe.seq_sem_estado)
+
+            novo_fe._reintegrar_rm(c_id, "127.0.0.1", 5120, forcar_sync=True)
+            syncs = [p for p, _ in sock.enviados if p[0] == protocolo.MSG_STATE_SYNC]
+            self.assertEqual(protocolo.unpack_state_sync(syncs[-1]), (4, 3, 105))
+        finally:
+            novo_fe.fechar_sockets()
+
     def test_voto_divergente_recebe_state_sync(self):
         fe_id = ip_para_id("127.0.0.1")
         rm1_id = ip_para_id("127.0.0.2")

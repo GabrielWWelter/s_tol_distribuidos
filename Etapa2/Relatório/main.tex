@@ -166,7 +166,7 @@ A comunicação externa liga clientes ao FE e utiliza descoberta por broadcast,
 requisições e respostas unicast. O canal interno liga os servidores e transporta
 ordens, confirmações, heartbeats, topologia, eleição e sincronização de estado.
 
-Para a comunicação intra-cluster das ordens de replicação, o método \arquivo{multicast\_rms} realiza o envio direto do datagrama UDP a cada nó registrado na topologia ativa. O foco da camada de replicação é a ordenação total entre os processos por sockets UDP. Essa abordagem dirigida mostra-se mais adequada e previsível para o ambiente de demonstração: em redes de laboratório e switches corporativos, alguns recursos frequentemente bloqueiam ou descartam pacotes de multicast IP na ausência de um roteador de multicast configurado. Além disso, o envio direcionado aos nós da topologia viabiliza a execução de testes em múltiplas interfaces de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2}, etc.) em uma mesma máquina, assegurando funcionamento confiável sem dependências da infraestrutura física da rede local.
+Para a comunicação intra-cluster das ordens de replicação, o método \arquivo{multicast\_rms} envia cada ordem uma vez ao grupo IP multicast \texttt{239.255.10.85}, do qual todos os servidores participam. As retransmissões seguem por unicast a cada RM ativo, o que mantém o serviço funcionando em redes que bloqueiam multicast. Como o grupo é compartilhado, o RM só aceita ordens vindas do líder que reconhece.
 
 \subsection{Mensagens principais}
 
@@ -254,7 +254,7 @@ Entre clientes diferentes, o Front-End intercala as operações em uma sequênci
 
 A monitoração de integridade dos nós opera por meio da troca periódica de mensagens \mensagem{MSG\_HEARTBEAT} via UDP a cada 25~ms, contendo a identidade do líder conhecido e a última sequência confirmada pelo remetente. O módulo \arquivo{detector\_falhas.py} mantém o registro temporal de contato de cada nó ativo. Em redes locais de baixa latência (RTT em torno de 1~ms), adotou-se uma política temporal em dois níveis para balancear rapidez de recuperação e tolerância a variações do escalonador do sistema operacional.
 
-Para as perdas pontuais de pacote, o timeout de espera para retransmissões foi fixado em valores curtos (5~ms para ordens intra-cluster no Front-End e 10~ms no cliente), permitindo recuperação rápida diante de eventuais perdas de datagramas UDP sem degradar a vazão.
+Para as perdas pontuais de pacote, o timeout de espera para retransmissões foi fixado em valores curtos (10~ms para ordens intra-cluster no Front-End e no cliente), permitindo recuperação rápida diante de eventuais perdas de datagramas UDP sem degradar a vazão.
 Já para a detecção de falha de nó, a estratégia foi declarar a inatividade de um servidor apenas após a ausência de 3 heartbeats consecutivos (timeout acumulado de 75~ms), proporcionando failover ágil sem eleições em rede local.
 
 
