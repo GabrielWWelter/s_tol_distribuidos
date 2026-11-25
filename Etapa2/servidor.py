@@ -17,6 +17,7 @@ TIMEOUT_ELECTION_ACK = 0.025
 TENTATIVAS_ELEICAO = 3
 TIMEOUT_ELEICAO = 0.3
 TIMEOUT_DESCOBERTA = 0.2
+PRAZO_RECUPERACAO = 0.25  # menor que TIMEOUT_ELEICAO
 
 
 def obter_ip_interface():
@@ -67,6 +68,7 @@ class ServidorReplicado:
         self.detector = DetectorFalhas(TIMEOUT_HEARTBEAT)
         self.ultimo_seq_no = {}
         self.ultimo_sync_enviado = {}
+        self.atraso_visto = None
         self.ack_eleicao = threading.Event()
         self.evento_descoberta = threading.Event()
         self.esperando_ack_de = None
@@ -104,6 +106,24 @@ class ServidorReplicado:
             self.sock_cluster_bcast.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.sock_cluster_bcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.sock_cluster_bcast.bind(("", self.port_cluster))
+
+        # IP multicast: entra no grupo pela interface de rede e pelo loopback
+        grupo = socket.inet_aton(protocolo.GRUPO_MULTICAST)
+        for interface in {obter_ip_interface(), "127.0.0.1"}:
+            try:
+                self.sock_cluster_bcast.setsockopt(
+                    socket.IPPROTO_IP,
+                    socket.IP_ADD_MEMBERSHIP,
+                    grupo + socket.inet_aton(interface),
+                )
+            except OSError:
+                pass
+        try:
+            self.sock_cluster.setsockopt(
+                socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.ip_maq)
+            )
+        except OSError:
+            pass
 
         self.fe = FrontEnd(
             self.ip_maq,
@@ -208,6 +228,12 @@ class ServidorReplicado:
             tipo = dados[0]
             if tipo == protocolo.MSG_SERVER_DISCOVERY:
                 self.tratar_server_discovery(dados, addr)
+            elif tipo == protocolo.MSG_ORDER_MULTICAST and not self.is_leader():
+                # o grupo é compartilhado: só vale a ordem vinda do líder atual
+                with self.lock_nos:
+                    lider = self.nos_cluster.get(self.leader_id)
+                if lider is not None and lider[0] == addr[0]:
+                    self.rm.tratar_order_multicast(dados, addr, self.leader_id)
 
     def _enviar_descoberta_cluster(self):
         pct = protocolo.pack_server_discovery(self.node_id)
@@ -451,11 +477,15 @@ class ServidorReplicado:
                 protocolo.COLOR_LEADER,
             )
 
-    def propagar_eleicao(self, candidato):
-        self.em_eleicao = True
-        if self.inicio_eleicao is None:
-            self.inicio_eleicao = time.monotonic()
-        pacote = protocolo.pack_election(self.node_id, candidato)
+    def propagar_eleicao(self, candidato, eleito=None):
+        """Envia <election, candidato> ou, se eleito for dado, <elected, eleito>."""
+        if eleito is None:
+            self.em_eleicao = True  # participante
+            if self.inicio_eleicao is None:
+                self.inicio_eleicao = time.monotonic()
+            pacote = protocolo.pack_election(self.node_id, candidato)
+        else:
+            pacote = protocolo.pack_elected(self.node_id, eleito)
         with self.lock_eleicao:
             inativos = self.inativos()
             try:
@@ -466,7 +496,11 @@ class ServidorReplicado:
                         addr_sucessor = self.nos_cluster.get(sucessor) if sucessor is not None else None
                     if sucessor is None:
                         break
-                    self.log(f"Enviando eleição a {self.ip(sucessor)} (candidato={self.ip(candidato)})")
+                    self.log(
+                        f"Enviando eleição a {self.ip(sucessor)} (candidato={self.ip(candidato)})"
+                        if eleito is None
+                        else f"Enviando eleito a {self.ip(sucessor)} (eleito={self.ip(eleito)})"
+                    )
                     self.esperando_ack_de = sucessor
                     for _ in range(TENTATIVAS_ELEICAO):
                         self.ack_eleicao.clear()
@@ -481,7 +515,8 @@ class ServidorReplicado:
                     inativos.add(sucessor)
             finally:
                 self.esperando_ack_de = None
-        self.assumir_lideranca()
+        if eleito is None:
+            self.assumir_lideranca()
 
     def tratar_eleicao(self, dados, addr):
         try:
@@ -503,17 +538,65 @@ class ServidorReplicado:
             except OSError:
                 pass
             return
+        participante = self.em_eleicao
         self.em_eleicao = True
         if self.inicio_eleicao is None:
             self.inicio_eleicao = time.monotonic()
         self.log(f"Eleição recebida de {self.ip(remetente)} (candidato={self.ip(candidato)})")
-        acao, candidato = eleicao_anel.tratar_eleicao(self.node_id, candidato, self.inativos())
-        if acao == "eleito":
+        acao, candidato = eleicao_anel.tratar_eleicao(
+            self.node_id, candidato, self.inativos(), participante
+        )
+        if acao == "descartar":
+            self.log("Eleição descartada: já sou participante com candidato maior")
+        elif acao == "eleito":
             self.assumir_lideranca()
         else:
             self.propagar_eleicao(candidato)
 
+    def tratar_eleito(self, dados, addr):
+        remetente, eleito = protocolo.unpack_elected(dados)
+        try:
+            self.sock_cluster.sendto(protocolo.pack_election_ack(self.node_id), addr)
+        except OSError:
+            pass
+        if eleito == self.node_id:
+            self.log("Mensagem <eleito> completou a volta no anel")
+            return
+        if eleito not in self.detector.ativos():
+            return  # o eleito caiu: a mensagem não pode circular para sempre
+        self.log(f"Eleito recebido de {self.ip(remetente)} (eleito={self.ip(eleito)})")
+        if self.definir_lider(eleito, via_coordenador=True):
+            self.propagar_eleicao(None, eleito=eleito)
+
+    def _recuperar_operacoes(self, antigo_lider):
+        """O eleito (maior IP) pode estar atrasado: antes de assumir, pede ao RM
+        mais avançado as operações que faltam."""
+        fim = time.monotonic() + PRAZO_RECUPERACAO
+        while time.monotonic() < fim and self.leader_id == antigo_lider:
+            outros = self.detector.ativos() - {self.node_id, antigo_lider}
+            fonte = max(outros, key=lambda n: self.ultimo_seq_no.get(n, -1), default=None)
+            esperado = self.rm.obter_proximo_seq()
+            if self.ultimo_seq_no.get(fonte, -1) < esperado:
+                return
+            self.log(f"Recuperando operações a partir de seq={esperado} com {self.ip(fonte)}")
+            self.enviar_a(fonte, protocolo.pack_nack(esperado, self.node_id))
+            time.sleep(0.01)
+
+    def enviar_a(self, no_id, pacote):
+        with self.lock_nos:
+            addr = self.nos_cluster.get(no_id)
+        if addr is not None:
+            try:
+                self.sock_cluster.sendto(pacote, addr)
+            except OSError:
+                pass
+
     def assumir_lideranca(self):
+        antigo_lider = self.leader_id
+        if not self.is_leader():
+            self._recuperar_operacoes(antigo_lider)
+            if self.leader_id not in (antigo_lider, self.node_id):
+                return  # outro líder foi reconhecido durante a recuperação
         with self.lock_lider:
             if not self.is_leader():
                 with self.rm.lock_rm:
@@ -546,7 +629,7 @@ class ServidorReplicado:
                     f"Quórum atual: {self.fe.formatar_quorum()}",
                     protocolo.COLOR_LEADER,
                 )
-        self.enviar_a_todos(protocolo.pack_coordinator(self.node_id))
+        self.propagar_eleicao(None, eleito=self.node_id)
         self.propagar_topologia()
 
     def definir_lider(self, lider_id, via_coordenador=False):
@@ -577,6 +660,10 @@ class ServidorReplicado:
                     if lider_id < self.leader_id or seq_remoto < seq_rm:
                         return False
             mudou = lider_id != self.leader_id
+            if mudou:
+                # Pendências do líder anterior podem conflitar com as do novo
+                with self.rm.lock_rm:
+                    self.rm.buffer.limpar_pendencias_nao_aplicadas()
             self.leader_id = lider_id
             self.em_eleicao = False
             self.inicio_eleicao = None
@@ -591,6 +678,14 @@ class ServidorReplicado:
             self.enviar_a_todos(protocolo.pack_coordinator(lider_id))
             self._enviar_join_ao_lider(lider_id)
         return True
+
+    def _verificar_atraso(self, seq_confirmado):
+        """Pede reenvio se o FE confirmou algo que falta aqui, mesmo sem novas
+        requisições. Exige dois heartbeats, para ignorar operações em trânsito."""
+        esperado = self.rm.obter_proximo_seq()
+        if seq_confirmado >= esperado and self.atraso_visto == esperado:
+            self.enviar_a(self.leader_id, protocolo.pack_nack(esperado, self.node_id))
+        self.atraso_visto = esperado
 
     def tratar_heartbeat(self, dados, addr):
         lider_remoto, ultimo_seq = protocolo.unpack_heartbeat(dados)
@@ -607,6 +702,8 @@ class ServidorReplicado:
             if not self.definir_lider(no_id, via_coordenador=False):
                 if self.is_leader():
                     self._anunciar_lideranca_para((addr[0], self.port_cluster))
+            elif not self.is_leader() and no_id == self.leader_id:
+                self._verificar_atraso(ultimo_seq)
             return
 
         if not self.is_leader():
@@ -647,6 +744,8 @@ class ServidorReplicado:
                 self.rm.sincronizar(next_seq, num_reqs, total_sum, self.leader_id)
             elif tipo == protocolo.MSG_ELECTION:
                 threading.Thread(target=self.tratar_eleicao, args=(dados, addr), daemon=True).start()
+            elif tipo == protocolo.MSG_ELECTED:
+                threading.Thread(target=self.tratar_eleito, args=(dados, addr), daemon=True).start()
             elif tipo == protocolo.MSG_ELECTION_ACK:
                 if protocolo.unpack_election_ack(dados) == self.esperando_ack_de:
                     self.ack_eleicao.set()
@@ -697,8 +796,11 @@ class ServidorReplicado:
                     self.rm.sincronizar(next_seq, num_reqs, total_sum, self.leader_id)
                 elif tipo == protocolo.MSG_RM_ACK and self.is_leader():
                     self.fe.tratar_rm_ack(dados)
-                elif tipo == protocolo.MSG_NACK and self.is_leader():
-                    self.fe.tratar_nack(dados, addr)
+                elif tipo == protocolo.MSG_NACK:
+                    if self.is_leader():
+                        self.fe.tratar_nack(dados, addr)
+                    else:
+                        self.rm.reenviar_operacoes(dados, addr)
                 elif tipo == protocolo.MSG_DISCOVERY_FWD and self.is_leader():
                     try:
                         client_addr = protocolo.unpack_discovery_fwd(dados)

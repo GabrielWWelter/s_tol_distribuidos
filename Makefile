@@ -54,7 +54,7 @@ zip: clean
 help:
 	@echo "Alvos disponiveis no Makefile:"
 	@echo "  make compile   - Compila e valida a sintaxe dos arquivos Python"
-	@echo "  make test      - Executa os 65 testes unitarios da Etapa 2"
+	@echo "  make test      - Executa os 80 testes unitarios da Etapa 2"
 	@echo "  make test-all  - Executa os testes da Etapa 1 e Etapa 2"
 	@echo "  make server    - Inicia uma instancia de servidor (portas 4000 5000)"
 	@echo "  make client    - Inicia o cliente interativo (porta 4000)"

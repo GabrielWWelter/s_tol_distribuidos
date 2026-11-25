@@ -133,7 +133,7 @@ Conforme requerido na especificação da Parte 2, a arquitetura desenvolvida na 
 
     cliente.py & Stop-and-wait simples com identificador incremental \arquivo{id\_req}. Descoberta estática via broadcast pontual. & Inclusão de \arquivo{client\_id} aleatório de 64 bits para formar a chave unívoca $\langle client\_id, id\_req \rangle$. Retransmissão com redescoberta dinâmica do novo FE sob failover. \\
     \addlinespace
-    protocolo.py & Apenas 4 mensagens básicas (\mensagem{DISCOVERY}, \mensagem{DISCOVERY\_RESP}, \mensagem{REQ}, \mensagem{ACK}). & Inclusão de 13 novas mensagens intra-cluster (\mensagem{ORDER\_MULTICAST}, \mensagem{RM\_ACK}, \mensagem{HEARTBEAT}, \mensagem{ELECTION}, \mensagem{COORDINATOR}, \mensagem{STATE\_SYNC}, etc.). Serialização com \arquivo{struct} de 64 bits. \\
+    protocolo.py & Apenas 4 mensagens básicas (\mensagem{DISCOVERY}, \mensagem{DISCOVERY\_RESP}, \mensagem{REQ}, \mensagem{ACK}). & Inclusão de 14 novas mensagens intra-cluster (\mensagem{ORDER\_MULTICAST}, \mensagem{RM\_ACK}, \mensagem{HEARTBEAT}, \mensagem{ELECTION}, \mensagem{COORDINATOR}, \mensagem{STATE\_SYNC}, etc.). Serialização com \arquivo{struct} de 64 bits. \\
     \addlinespace
     servidor.py & Processo estático único com papel fixo, sem tolerância a falhas. Acumulador local simples. & Desacoplamento dinâmico entre papéis FE e RM. Detecção automática de IP de interface. Loops assíncronos de controle intra-cluster e orquestração do anel. \\
     \addlinespace
@@ -166,7 +166,7 @@ A comunicação externa liga clientes ao FE e utiliza descoberta por broadcast,
 requisições e respostas unicast. O canal interno liga os servidores e transporta
 ordens, confirmações, heartbeats, topologia, eleição e sincronização de estado.
 
-Para a comunicação intra-cluster das ordens de replicação, o método \arquivo{multicast\_rms} realiza o envio direto do datagrama UDP a cada nó registrado na topologia ativa. O foco da camada de replicação é a ordenação total entre os processos por sockets UDP. Essa abordagem dirigida mostra-se mais adequada e previsível para o ambiente de demonstração: em redes de laboratório e switches corporativos, alguns recursos frequentemente bloqueiam ou descartam pacotes de multicast IP na ausência de um roteador de multicast configurado. Além disso, o envio direcionado aos nós da topologia viabiliza a execução de testes em múltiplas interfaces de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2}, etc.) em uma mesma máquina, assegurando funcionamento confiável sem dependências da infraestrutura física da rede local.
+Na comunicação intra-cluster, a primeira transmissão de cada ordem é enviada por IP multicast ao grupo \texttt{239.255.10.85}, na porta do cluster (método \arquivo{multicast\_rms}). Enquanto a requisição aguarda quórum, as retransmissões são enviadas por \textit{unicast} a cada RM ativo, assim como os reenvios solicitados por \mensagem{MSG\_NACK}.
 
 \subsection{Mensagens principais}
 
@@ -187,7 +187,8 @@ Para a comunicação intra-cluster das ordens de replicação, o método \arquiv
         MSG\_TOPOLOGY & Propagação dos membros e do líder atual. \\
         MSG\_RM\_JOIN / STATE\_SYNC & Ingresso e sincronização de um RM. \\
         MSG\_ELECTION / ELECTION\_ACK & Circulação e confirmação da eleição no anel. \\
-        MSG\_COORDINATOR & Proclamação do novo FE. \\
+        MSG\_ELECTED & Anúncio do eleito, que percorre o anel. \\
+        MSG\_COORDINATOR & Anúncio direto do FE já ativo. \\
         \bottomrule
     \end{tabularx}
 \end{table}
@@ -267,12 +268,12 @@ Primeiramente, ao constatar o silêncio do Front-End pelo detector de falhas, o 
 
 Posteriormente, cada repasse no anel requer uma confirmação (\mensagem{MSG\_ELECTION\_ACK}). Caso o sucessor não responda após 3 tentativas consecutivas (timeout de 25~ms por tentativa e timeout global de eleição de 300~ms), o remetente considera o sucessor inativo, pula-o no percurso e tenta o próximo nó subsequente na topologia, garantindo convergência mesmo diante de quedas sucessivas ou concorrentes.
 
-Ao receber, então, uma mensagem de eleição, o nó compara o candidato recebido com seu próprio identificador: se seu ID for maior, substitui o candidato pelo seu próprio antes de repassar; se for menor, repassa o candidato recebido.
+Ao receber, então, uma mensagem de eleição, o nó compara o candidato recebido com seu próprio identificador: se o candidato for maior, o repassa; se for menor, o substitui pelo próprio identificador antes de repassar, ou descarta a mensagem caso já seja participante da eleição.
 
-Por fim, quando a mensagem retorna com a própria identidade do nó remetente, este torna-se ganhador e autoproclama-se coordenador, mandando \mensagem{MSG\_COORDINATOR} a todos os nós do cluster para assumir as funções de Front-End e sequenciador global.
+Por fim, quando a mensagem retorna com a própria identidade do nó remetente, este torna-se ganhador e envia \mensagem{MSG\_ELECTED}, que percorre o anel até voltar a ele, para então assumir as funções de Front-End e sequenciador global.
 
 
-O novo FE assume com base no seu estado local (próxima sequência, quantidade de requisições e acumulador). Todas as etapas do algoritmo (detecção da queda, disparo da eleição, repasses e proclamação do novo líder) emitem mensagens padronizadas e destacadas no terminal.
+Antes de assumir, se estiver atrasado, o vencedor pede por \mensagem{MSG\_NACK} as operações que faltam ao RM mais avançado, e os demais RMs descartam as pendências do líder anterior. Um RM também usa \mensagem{MSG\_NACK} quando o \textit{heartbeat} indica que está atrasado. Todas as etapas do algoritmo (detecção da queda, disparo da eleição, repasses e proclamação do novo líder) emitem mensagens padronizadas e destacadas no terminal.
 
 Após a eleição, o cliente usa stop-and-wait e mantém a mesma operação até receber o ACK. Após
 sucessivas tentativas sem resposta, ele executa novamente a descoberta, atualiza
@@ -305,7 +306,7 @@ fora das regiões críticas para não bloquear outras requisições.
 
 \section{Testes e resultados experimentais}
 
-A validação do sistema compreendeu testes unitários automatizados, testes manuais de tolerância a falhas em ambiente local (\textit{loopback}) e experimentos distribuídos com até cinco computadores na rede local de laboratórios do INF-UFRGS. Com o framework \arquivo{unittest}, foram executados os 65 testes da Parte 2 e os 8 testes de regressão da Parte 1, obtendo-se 100\% de aprovação.
+A validação do sistema compreendeu testes unitários automatizados, testes manuais de tolerância a falhas em ambiente local (\textit{loopback}) e experimentos distribuídos com até cinco computadores na rede local de laboratórios do INF-UFRGS. Com o framework \arquivo{unittest}, foram executados os 80 testes da Parte 2 e os 8 testes de regressão da Parte 1, obtendo-se 100\% de aprovação.
 
 Nos testes locais, instanciaram-se três processos de servidores na mesma máquina, reutilizando o mesmo par de portas (\texttt{4000} para clientes e \texttt{5000} para o cluster), com alocação automática de endereços de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2} e \texttt{127.0.0.3}), e um cliente na porta \texttt{4000}. Foram avaliados três cenários: queda do Front-End e eleição em anel, redescoberta e continuidade das requisições pelo cliente, e queda de um Replica Manager.
 
@@ -345,6 +346,8 @@ concentrou-se na análise comparativa de requisitos com a Parte 1, na escrita e 
 
 Todas as sugestões de código e fundamentações teóricas foram revisadas e validadas por meio de testes automatizados e execuções práticas. O uso dos assistentes não substituiu as decisões de projeto do grupo: a arquitetura de replicação ativa, o algoritmo do anel, o modelo de quórum e os mecanismos de recuperação de falhas foram implementados, compreendidos e testados pela equipe.
 
+O Claude Code (modelo Claude Sonnet 5.5) também foi usado para analisar o código, implementar as correções de \textit{failover}, a mensagem \mensagem{MSG\_ELECTED} e os logs de recebimento dos RMs, escrever testes e ajustar este relatório e o tutorial.
+
 \section{Divisão de responsabilidades}
 
 A divisão abaixo foi reconstruída a partir do histórico Git do projeto e discussões internas do grupo.
@@ -379,7 +382,7 @@ Para simplificar a compilação, execução e empacotamento do projeto conforme 
 
 \begin{lstlisting}[style=pythonstyle,language=bash,numbers=none]
 make compile    # Valida sintaxe e compila bytecodes Python
-make test       # Executa os 65 testes unitarios da Etapa 2
+make test       # Executa os 80 testes unitarios da Etapa 2
 make test-all   # Executa os testes de regressao da Etapa 1 e Etapa 2
 make zip        # Gera o pacote entrega_etapa2.zip para submissao
 \end{lstlisting}

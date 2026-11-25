@@ -52,6 +52,22 @@ class ReplicaManager:
                     except OSError:
                         pass
 
+    def reenviar_operacoes(self, dados, addr):
+        """Atende o NACK de um novo líder atrasado com operações já aplicadas."""
+        inicio, _ = protocolo.unpack_nack(dados)
+        with self.lock_rm:
+            fim = min(inicio + 64, self.buffer.expected_seq)
+            pacotes = [
+                protocolo.pack_order_multicast(s, *self.buffer.historico[s][0])
+                for s in range(inicio, fim)
+                if s in self.buffer.historico
+            ]
+        for pacote in pacotes:
+            try:
+                self.sock_cluster.sendto(pacote, addr)
+            except OSError:
+                pass
+
     def tratar_order_multicast(self, dados, addr_remetente, leader_id):
         try:
             seq_id, id_cliente, id_req, valor = protocolo.unpack_order_multicast(dados)
@@ -59,6 +75,15 @@ class ReplicaManager:
             return
 
         with self.lock_rm:
+            if seq_id >= self.buffer.expected_seq and seq_id not in self.buffer.pendencias:
+                print(
+                    protocolo.colorir(
+                        f"[RM {self.ip_maq}] Requisição recebida do FE: seq={seq_id} "
+                        f"(client={id_cliente}, req={id_req}, val={valor})",
+                        protocolo.COLOR_RM,
+                    ),
+                    flush=True,
+                )
             try:
                 aplicou, resultados = self.buffer.processar(
                     seq_id, id_cliente, id_req, valor

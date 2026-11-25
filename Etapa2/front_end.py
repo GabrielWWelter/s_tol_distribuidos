@@ -102,8 +102,9 @@ class FrontEnd:
         except OSError:
             pass
 
-    def multicast_rms(self, pacote):
-        """Dissemina a operação via multicast para todos os RMs ativos."""
+    def multicast_rms(self, pacote, reenvio=False):
+        """Dissemina a operação via IP multicast; os reenvios vão por unicast a
+        cada RM ativo, o que cobre redes que bloqueiam multicast."""
         agora = time.monotonic()
         with self.lock_fe:
             destinos = []
@@ -113,6 +114,15 @@ class FrontEnd:
                     destinos.append(addr_rm)
                     if self.aguardando_desde.get(rm_id) is None:
                         self.aguardando_desde[rm_id] = agora
+
+        if destinos and not reenvio:
+            try:
+                self.sock_cluster.sendto(
+                    pacote, (protocolo.GRUPO_MULTICAST, destinos[0][1])
+                )
+                return
+            except OSError:
+                pass
 
         for addr in destinos:
             try:
@@ -192,7 +202,7 @@ class FrontEnd:
                         if not check_lider():
                             return
                         tentativas += 1
-                        self.multicast_rms(pacote_mc)
+                        self.multicast_rms(pacote_mc, reenvio=True)
                         if tentativas >= 200:
                             return
                 finally:
