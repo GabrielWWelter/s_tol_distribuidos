@@ -169,19 +169,18 @@ class TestServidorDinamico(unittest.TestCase):
             novo_fe.fe.processar_requisicao_cliente(
                 protocolo.pack_req(2002, 1, 40), ("127.0.0.10", 6001), lambda: True
             )
-            # Sem RMs ativos no cluster, o FE nao responde sozinho (sem quorum)
-            self.assertEqual(len(sock_cli.enviados), 0)
-
-            # Apos o RM ingressar e confirmar a operacao, atinge quorum e responde o ACK
-            novo_fe.fe.adicionar_rm(rm2_id, "127.0.0.2", 5107)
-            novo_fe.fe.tratar_rm_ack(protocolo.pack_rm_ack(2, 2002, 1, 2, 50, rm2_id))
-            novo_fe.fe.processar_requisicao_cliente(
-                protocolo.pack_req(2002, 1, 40), ("127.0.0.10", 6001), lambda: True
-            )
+            # Sem RMs ativos no cluster, o FE soma sozinho e responde
             self.assertEqual(len(sock_cli.enviados), 1)
             self.assertEqual(
                 protocolo.unpack_ack(sock_cli.enviados[0][0]), (2002, 1, 2, 50)
             )
+
+            # Reenvio do cliente devolve o mesmo resultado, sem somar de novo
+            novo_fe.fe.processar_requisicao_cliente(
+                protocolo.pack_req(2002, 1, 40), ("127.0.0.10", 6001), lambda: True
+            )
+            self.assertEqual(protocolo.unpack_ack(sock_cli.enviados[1][0]), (2002, 1, 2, 50))
+            self.assertEqual(novo_fe.fe.obter_estado_sincronizacao(), (3, 2, 50))
         finally:
             novo_fe.fechar_sockets()
 
@@ -277,6 +276,34 @@ class TestServidorDinamico(unittest.TestCase):
             self.assertEqual(protocolo.unpack_state_sync(syncs[-1]), (4, 3, 105))
         finally:
             novo_fe.fechar_sockets()
+
+    def test_fe_sozinho_resolve_pendencias_quando_ultimo_rm_cai(self):
+        fe_id = ip_para_id("127.0.0.1")
+        rm_id = ip_para_id("127.0.0.2")
+        sock_clu = SocketCapturador()
+        sock_cli = SocketCapturador()
+        nos = {fe_id: ("127.0.0.1", 5000), rm_id: ("127.0.0.2", 5000)}
+        fe = FrontEnd("127.0.0.1", fe_id, nos, fe_id, sock_cli, sock_clu)
+        fe.ativar(1, {}, {rm_id})
+        # RM confirma a op 1 (10); a op 2 (5) fica pendente quando o RM cai
+        for seq, req, val in ((1, 1, 10), (2, 2, 5)):
+            with fe.lock_fe:
+                fe.operacoes[seq] = {
+                    "dados_op": (700, req, val), "rms_que_votaram": set(),
+                    "votos_concordantes": {}, "resultado_final": None,
+                    "evento_quorum": threading.Event(), "em_andamento": False,
+                }
+                fe.op_to_seq[(700, req)] = seq
+                fe.pendentes.add(seq)
+                fe.next_seq = seq + 1
+        fe.tratar_rm_ack(protocolo.pack_rm_ack(1, 700, 1, 1, 10, rm_id))
+        fe.marcar_rm(rm_id, False)
+        self.assertEqual(fe.operacoes[2]["resultado_final"], (2, 15))
+        self.assertEqual(fe.obter_estado_sincronizacao(), (3, 2, 15))
+
+        # Nova requisição com o FE sozinho continua a sequência
+        fe.processar_requisicao_cliente(protocolo.pack_req(701, 1, 7), ("127.0.0.9", 6000), lambda: True)
+        self.assertEqual(protocolo.unpack_ack(sock_cli.enviados[-1][0]), (701, 1, 3, 22))
 
     def test_voto_divergente_recebe_state_sync(self):
         fe_id = ip_para_id("127.0.0.1")

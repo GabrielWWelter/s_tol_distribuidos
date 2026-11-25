@@ -180,8 +180,17 @@ class FrontEnd:
                         f"Quórum atual: {self.formatar_quorum()}"
                     )
 
+                logs_locais = []
+                if not self.rms_ativos and self.seq_sem_estado is None:
+                    # FE sozinho: soma localmente em vez de esperar um RM
+                    logs_locais = self._aplicar_localmente()
+                    op_info["em_andamento"] = False
+                    conduzir_multicast = False
+
             if log_recebida is not None:
                 print(protocolo.colorir(log_recebida, protocolo.COLOR_FE), flush=True)
+            for linha in logs_locais:
+                print(protocolo.colorir(linha, protocolo.COLOR_FE), flush=True)
 
             if op_info["evento_quorum"].is_set() and op_info["resultado_final"] is not None:
                 num_reqs, total_sum = op_info["resultado_final"]
@@ -284,6 +293,31 @@ class FrontEnd:
             sync_num_reqs = self.num_reqs
             sync_total_sum = self.total_sum
         return sync_seq, sync_num_reqs, sync_total_sum
+
+    def _aplicar_localmente(self):
+        """Sem RMs ativos, o FE aplica as operações pendentes em ordem de seq."""
+        num_reqs, total_sum = self._estado_sincronizacao_interno()[1:]
+        inicio = min(self.pendentes) if self.pendentes else self.next_seq
+        logs = []
+        for seq_id in range(inicio, self.next_seq):
+            op_info = self.operacoes.get(seq_id)
+            if op_info is None:
+                continue
+            if op_info["resultado_final"] is None:
+                num_reqs = (num_reqs + 1) & 0xFFFFFFFFFFFFFFFF
+                total_sum = (total_sum + op_info["dados_op"][2]) & 0xFFFFFFFFFFFFFFFF
+                op_info["resultado_final"] = (num_reqs, total_sum)
+                op_info["evento_quorum"].set()
+                logs.append(
+                    f"[FE {self.ip_maq}] Sem RMs ativos: aplicado localmente seq={seq_id} | "
+                    f"num_reqs={num_reqs} | total_sum={total_sum}"
+                )
+            else:
+                num_reqs, total_sum = op_info["resultado_final"]
+        self.pendentes.clear()
+        self.num_reqs, self.total_sum = num_reqs, total_sum
+        self._podar_historico()
+        return logs
 
     def _pacotes_pendentes_interno(self):
         pacotes = []
@@ -443,6 +477,9 @@ class FrontEnd:
                 if op_info is not None and not op_info["evento_quorum"].is_set():
                     if self.rms_ativos:
                         self._verificar_quorum_op(seq_id, op_info)
+            if not self.rms_ativos and self.pendentes and self.seq_sem_estado is None:
+                for linha in self._aplicar_localmente():
+                    print(protocolo.colorir(linha, protocolo.COLOR_FE), flush=True)
             evento, cor = "Falha detectada no", protocolo.COLOR_FAIL
         ip_rm = self.nos_cluster.get(rm_id, (str(rm_id),))[0]
         print(

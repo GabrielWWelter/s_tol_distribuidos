@@ -226,7 +226,9 @@ onde $M$ é a quantidade atual de RMs ativos. Cada RM pode votar uma única vez
 por sequência. Os votos são agrupados pelo par
 \arquivo{(num\_reqs, total\_sum)}, e o FE responde ao cliente apenas quando um
 grupo concordante alcança $Q$. Se um RM falha, ele é removido do conjunto ativo
-e o quórum das operações pendentes é reavaliado.
+e o quórum das operações pendentes é reavaliado. Sem nenhum RM ativo ($M = 0$),
+o FE aplica as operações em ordem de sequência no próprio acumulador e responde
+ao cliente, de modo que o serviço continua com um único servidor ativo.
 
 \subsection{Perda de datagramas e sincronização}
 
