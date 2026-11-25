@@ -451,11 +451,15 @@ class ServidorReplicado:
                 protocolo.COLOR_LEADER,
             )
 
-    def propagar_eleicao(self, candidato):
-        self.em_eleicao = True
-        if self.inicio_eleicao is None:
-            self.inicio_eleicao = time.monotonic()
-        pacote = protocolo.pack_election(self.node_id, candidato)
+    def propagar_eleicao(self, candidato, eleito=None):
+        """Envia <election, candidato> ou, se eleito for dado, <elected, eleito>."""
+        if eleito is None:
+            self.em_eleicao = True  # participante
+            if self.inicio_eleicao is None:
+                self.inicio_eleicao = time.monotonic()
+            pacote = protocolo.pack_election(self.node_id, candidato)
+        else:
+            pacote = protocolo.pack_elected(self.node_id, eleito)
         with self.lock_eleicao:
             inativos = self.inativos()
             try:
@@ -466,7 +470,10 @@ class ServidorReplicado:
                         addr_sucessor = self.nos_cluster.get(sucessor) if sucessor is not None else None
                     if sucessor is None:
                         break
-                    self.log(f"Enviando eleição a {self.ip(sucessor)} (candidato={self.ip(candidato)})")
+                    if eleito is None:
+                        self.log(f"Enviando eleição a {self.ip(sucessor)} (candidato={self.ip(candidato)})")
+                    else:
+                        self.log(f"Enviando eleito a {self.ip(sucessor)} (eleito={self.ip(eleito)})")
                     self.esperando_ack_de = sucessor
                     for _ in range(TENTATIVAS_ELEICAO):
                         self.ack_eleicao.clear()
@@ -481,7 +488,8 @@ class ServidorReplicado:
                     inativos.add(sucessor)
             finally:
                 self.esperando_ack_de = None
-        self.assumir_lideranca()
+        if eleito is None:
+            self.assumir_lideranca()
 
     def tratar_eleicao(self, dados, addr):
         try:
@@ -503,15 +511,43 @@ class ServidorReplicado:
             except OSError:
                 pass
             return
+        participante = self.em_eleicao
         self.em_eleicao = True
         if self.inicio_eleicao is None:
             self.inicio_eleicao = time.monotonic()
         self.log(f"Eleição recebida de {self.ip(remetente)} (candidato={self.ip(candidato)})")
-        acao, candidato = eleicao_anel.tratar_eleicao(self.node_id, candidato, self.inativos())
-        if acao == "eleito":
+        acao, candidato = eleicao_anel.tratar_eleicao(
+            self.node_id, candidato, self.inativos(), participante
+        )
+        if acao == "descartar":
+            self.log("Eleição descartada: já sou participante e meu id é maior que o candidato")
+        elif acao == "eleito":
             self.assumir_lideranca()
         else:
             self.propagar_eleicao(candidato)
+
+    def tratar_eleito(self, dados, addr):
+        try:
+            remetente, eleito = protocolo.unpack_elected(dados)
+        except struct.error:
+            return
+        with self.lock_nos:
+            conhecidos = remetente in self.nos_cluster and eleito in self.nos_cluster
+        if not conhecidos:
+            return
+        self.detector.registrar(remetente)
+        try:
+            self.sock_cluster.sendto(protocolo.pack_election_ack(self.node_id), addr)
+        except OSError:
+            pass
+        if eleito == self.node_id:
+            self.log("Mensagem de eleito completou a volta no anel")
+            return
+        if eleito not in self.detector.ativos():
+            return  # o eleito caiu: a mensagem não pode circular para sempre
+        self.log(f"Eleito recebido de {self.ip(remetente)} (eleito={self.ip(eleito)})")
+        if self.definir_lider(eleito, via_coordenador=True):
+            self.propagar_eleicao(None, eleito=eleito)
 
     def assumir_lideranca(self):
         with self.lock_lider:
@@ -546,8 +582,11 @@ class ServidorReplicado:
                     f"Quórum atual: {self.fe.formatar_quorum()}",
                     protocolo.COLOR_LEADER,
                 )
-        self.enviar_a_todos(protocolo.pack_coordinator(self.node_id))
         self.propagar_topologia()
+        # <elected> dá uma volta no anel, como nos slides
+        threading.Thread(
+            target=self.propagar_eleicao, args=(None, self.node_id), daemon=True
+        ).start()
 
     def definir_lider(self, lider_id, via_coordenador=False):
         with self.lock_nos:
@@ -647,6 +686,8 @@ class ServidorReplicado:
                 self.rm.sincronizar(next_seq, num_reqs, total_sum, self.leader_id)
             elif tipo == protocolo.MSG_ELECTION:
                 threading.Thread(target=self.tratar_eleicao, args=(dados, addr), daemon=True).start()
+            elif tipo == protocolo.MSG_ELECTED:
+                threading.Thread(target=self.tratar_eleito, args=(dados, addr), daemon=True).start()
             elif tipo == protocolo.MSG_ELECTION_ACK:
                 if protocolo.unpack_election_ack(dados) == self.esperando_ack_de:
                     self.ack_eleicao.set()

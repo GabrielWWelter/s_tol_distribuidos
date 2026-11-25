@@ -59,6 +59,7 @@ MSG_STATE_SYNC = 19
 MSG_ELECTION = 20
 MSG_COORDINATOR = 21
 MSG_ELECTION_ACK = 22
+MSG_ELECTED = 23
 
 # logs
 COLOR_RESET = "\033[0m"
@@ -111,6 +112,14 @@ def pack_coordinator(leader_id):
 def unpack_coordinator(dados):
     _, leader_id = struct.unpack("!BI", dados)
     return leader_id
+
+# <elected>, que dá uma volta no anel: 4 bytes sender_id, 4 bytes leader_id
+def pack_elected(sender_id, leader_id):
+    return struct.pack("!BII", MSG_ELECTED, sender_id, leader_id)
+
+def unpack_elected(dados):
+    _, sender_id, leader_id = struct.unpack("!BII", dados)
+    return sender_id, leader_id
 
 # Protocolos de NACK para evitar que um RM trave permanentemente em caso de perda de pacotes
 def pack_nack(expected_seq, rm_id):

@@ -55,6 +55,12 @@ class TestTratarEleicao(unittest.TestCase):
     def test_troca_candidato_menor_pelo_proprio_id(self):
         self.assertEqual(tratar_eleicao(20, 10), ("repassar", 20))
 
+    def test_participante_descarta_candidato_menor(self):
+        self.assertEqual(tratar_eleicao(20, 10, participante=True), ("descartar", 20))
+
+    def test_participante_repassa_candidato_maior(self):
+        self.assertEqual(tratar_eleicao(20, 30, participante=True), ("repassar", 30))
+
     def test_troca_candidato_inativo_pelo_proprio_id(self):
         self.assertEqual(tratar_eleicao(20, 30, inativos={30}), ("repassar", 20))
 

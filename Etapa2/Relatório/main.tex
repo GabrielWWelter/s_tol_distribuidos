@@ -133,7 +133,7 @@ Conforme requerido na especificação da Parte 2, a arquitetura desenvolvida na 
 
     cliente.py & Stop-and-wait simples com identificador incremental \arquivo{id\_req}. Descoberta estática via broadcast pontual. & Inclusão de \arquivo{client\_id} aleatório de 64 bits para formar a chave unívoca $\langle client\_id, id\_req \rangle$. Retransmissão com redescoberta dinâmica do novo FE sob failover. \\
     \addlinespace
-    protocolo.py & Apenas 4 mensagens básicas (\mensagem{DISCOVERY}, \mensagem{DISCOVERY\_RESP}, \mensagem{REQ}, \mensagem{ACK}). & Inclusão de 13 novas mensagens intra-cluster (\mensagem{ORDER\_MULTICAST}, \mensagem{RM\_ACK}, \mensagem{HEARTBEAT}, \mensagem{ELECTION}, \mensagem{COORDINATOR}, \mensagem{STATE\_SYNC}, etc.). Serialização com \arquivo{struct} de 64 bits. \\
+    protocolo.py & Apenas 4 mensagens básicas (\mensagem{DISCOVERY}, \mensagem{DISCOVERY\_RESP}, \mensagem{REQ}, \mensagem{ACK}). & Inclusão de 14 novas mensagens intra-cluster (\mensagem{ORDER\_MULTICAST}, \mensagem{RM\_ACK}, \mensagem{HEARTBEAT}, \mensagem{ELECTION}, \mensagem{COORDINATOR}, \mensagem{STATE\_SYNC}, etc.). Serialização com \arquivo{struct} de 64 bits. \\
     \addlinespace
     servidor.py & Processo estático único com papel fixo, sem tolerância a falhas. Acumulador local simples. & Desacoplamento dinâmico entre papéis FE e RM. Detecção automática de IP de interface. Loops assíncronos de controle intra-cluster e orquestração do anel. \\
     \addlinespace
@@ -187,7 +187,8 @@ Para a comunicação intra-cluster das ordens de replicação, o método \arquiv
         MSG\_TOPOLOGY & Propagação dos membros e do líder atual. \\
         MSG\_RM\_JOIN / STATE\_SYNC & Ingresso e sincronização de um RM. \\
         MSG\_ELECTION / ELECTION\_ACK & Circulação e confirmação da eleição no anel. \\
-        MSG\_COORDINATOR & Proclamação do novo FE. \\
+        MSG\_ELECTED & Anúncio do eleito, que dá uma volta no anel. \\
+        MSG\_COORDINATOR & Indicação do FE atual a quem ainda segue outro líder. \\
         \bottomrule
     \end{tabularx}
 \end{table}
@@ -261,15 +262,15 @@ A queda de um RM não inicia eleição: o FE apenas atualiza a topologia e ajust
 
 \subsection{Algoritmo do anel}
 
-O mecanismo de eleição adotado na Parte 2 é o \textbf{Algoritmo do Anel} (Chang \& Roberts). A identidade de cada servidor no anel é calculada unicamente a partir de seu endereço IPv4 convertido para um inteiro de 32 bits em ordem de rede, elegendo-se deterministicamente o nó com o maior endereço IP. Os participantes organizam-se logicamente em um anel unidirecional ordenado de forma crescente pelos seus identificadores.
+O mecanismo de eleição adotado na Parte 2 é o \textbf{Algoritmo do Anel} (Chang \& Roberts), escolhido por ser o único aceito para este trabalho, conforme definido em aula. A identidade de cada servidor no anel é calculada unicamente a partir de seu endereço IPv4 convertido para um inteiro de 32 bits em ordem de rede, elegendo-se deterministicamente o nó com o maior endereço IP. Os participantes organizam-se logicamente em um anel unidirecional ordenado de forma crescente pelos seus identificadores.
 
 Primeiramente, ao constatar o silêncio do Front-End pelo detector de falhas, o nó inicia a eleição emitindo \mensagem{MSG\_ELECTION} ao seu sucessor direto, contendo seu próprio ID como candidato.
 
 Posteriormente, cada repasse no anel requer uma confirmação (\mensagem{MSG\_ELECTION\_ACK}). Caso o sucessor não responda após 3 tentativas consecutivas (timeout de 25~ms por tentativa e timeout global de eleição de 300~ms), o remetente considera o sucessor inativo, pula-o no percurso e tenta o próximo nó subsequente na topologia, garantindo convergência mesmo diante de quedas sucessivas ou concorrentes.
 
-Ao receber, então, uma mensagem de eleição, o nó compara o candidato recebido com seu próprio identificador: se seu ID for maior, substitui o candidato pelo seu próprio antes de repassar; se for menor, repassa o candidato recebido.
+Ao receber, então, uma mensagem de eleição, o nó compara o candidato recebido com seu próprio identificador e passa a ser participante: se o candidato for maior, repassa-o; se for menor, o nó não participante o substitui pelo próprio ID, enquanto o participante descarta a mensagem.
 
-Por fim, quando a mensagem retorna com a própria identidade do nó remetente, este torna-se ganhador e autoproclama-se coordenador, mandando \mensagem{MSG\_COORDINATOR} a todos os nós do cluster para assumir as funções de Front-End e sequenciador global.
+Por fim, quando a mensagem retorna com a própria identidade do nó remetente, este torna-se ganhador, assume as funções de Front-End e sequenciador global e envia \mensagem{MSG\_ELECTED}, que dá uma volta no anel; cada nó registra o novo líder, deixa de ser participante e repassa a mensagem.
 
 
 O novo FE assume com base no seu estado local (próxima sequência, quantidade de requisições e acumulador). Todas as etapas do algoritmo (detecção da queda, disparo da eleição, repasses e proclamação do novo líder) emitem mensagens padronizadas e destacadas no terminal.
