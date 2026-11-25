@@ -61,9 +61,6 @@ MSG_COORDINATOR = 21
 MSG_ELECTION_ACK = 22
 MSG_ELECTED = 23
 
-# Grupo IP multicast usado na disseminação das ordens do FE aos RMs
-GRUPO_MULTICAST = "239.255.10.85"
-
 # logs
 COLOR_RESET = "\033[0m"
 COLOR_FE = "\033[96m"        # ciano (Front-End)

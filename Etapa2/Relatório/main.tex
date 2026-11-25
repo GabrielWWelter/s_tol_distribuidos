@@ -166,7 +166,7 @@ A comunicação externa liga clientes ao FE e utiliza descoberta por broadcast,
 requisições e respostas unicast. O canal interno liga os servidores e transporta
 ordens, confirmações, heartbeats, topologia, eleição e sincronização de estado.
 
-Para a comunicação intra-cluster das ordens de replicação, o método \arquivo{multicast\_rms} envia cada ordem uma vez ao grupo IP multicast \texttt{239.255.10.85}, do qual todos os servidores participam. As retransmissões seguem por unicast a cada RM ativo, o que mantém o serviço funcionando em redes que bloqueiam multicast. Como o grupo é compartilhado, o RM só aceita ordens vindas do líder que reconhece.
+Para a comunicação intra-cluster das ordens de replicação, o método \arquivo{multicast\_rms} realiza o envio direto do datagrama UDP a cada nó registrado na topologia ativa. O foco da camada de replicação é a ordenação total entre os processos por sockets UDP. Essa abordagem dirigida mostra-se mais adequada e previsível para o ambiente de demonstração: em redes de laboratório e switches corporativos, alguns recursos frequentemente bloqueiam ou descartam pacotes de multicast IP na ausência de um roteador de multicast configurado. Além disso, o envio direcionado aos nós da topologia viabiliza a execução de testes em múltiplas interfaces de loopback (\texttt{127.0.0.1}, \texttt{127.0.0.2}, etc.) em uma mesma máquina, assegurando funcionamento confiável sem dependências da infraestrutura física da rede local.
 
 \subsection{Mensagens principais}
 

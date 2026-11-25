@@ -105,22 +105,6 @@ class ServidorReplicado:
         self.sock_cluster_bcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         self.sock_cluster_bcast.bind(("", self.port_cluster))
 
-        # IP multicast: entra no grupo pela interface de rede e pelo loopback
-        grupo = socket.inet_aton(protocolo.GRUPO_MULTICAST)
-        for interface in {obter_ip_interface(), "127.0.0.1"}:
-            try:
-                self.sock_cluster_bcast.setsockopt(
-                    socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, grupo + socket.inet_aton(interface)
-                )
-            except OSError:
-                pass
-        try:
-            self.sock_cluster.setsockopt(
-                socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(self.ip_maq)
-            )
-        except OSError:
-            pass
-
         self.fe = FrontEnd(
             self.ip_maq,
             self.node_id,
@@ -224,12 +208,6 @@ class ServidorReplicado:
             tipo = dados[0]
             if tipo == protocolo.MSG_SERVER_DISCOVERY:
                 self.tratar_server_discovery(dados, addr)
-            elif tipo == protocolo.MSG_ORDER_MULTICAST and not self.is_leader():
-                # o grupo é compartilhado: só vale a ordem vinda do líder atual
-                with self.lock_nos:
-                    lider = self.nos_cluster.get(self.leader_id)
-                if lider is not None and lider[0] == addr[0]:
-                    self.rm.tratar_order_multicast(dados, addr, self.leader_id)
 
     def _enviar_descoberta_cluster(self):
         pct = protocolo.pack_server_discovery(self.node_id)
